@@ -1,0 +1,25 @@
+# Copyrighted game content (never commit)
+assets/
+**/assets/
+
+# Build output folders
+out/
+**/out/
+
+# Executables and runtime binaries
+*.exe
+bin/*.exe
+**/*.exe
+
+# Logs and traces
+*.log
+*.log.*
+bin/*.log
+
+# Common local/debug artifacts
+*.pdb
+*.ilk
+*.dmp
+*.tmp
+.DS_Store
+Thumbs.db
