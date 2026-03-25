@@ -6,7 +6,7 @@ Work-in-progress static recompilation setup for **Forza Horizon 1 (Xbox 360)** u
 
 ## Status
 
-- Active migration from earlier toolchain to ReXGlue.
+- Working on multi-XEX support, currently unimplemented in ReXGlue upstream and required for Forza games.
 - Runtime bring-up and crash triage are ongoing.
 - Local workflow currently targets Windows (`win-amd64`).
 
