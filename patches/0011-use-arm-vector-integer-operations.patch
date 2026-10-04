@@ -1,0 +1,113 @@
+--- a/include/rex/ppc/intrinsics.h
++++ b/include/rex/ppc/intrinsics.h
+@@ -209,10 +209,23 @@
+ 
+ // Permute bytes from two vectors based on control vector
+ inline simde__m128i simde_mm_perm_epi8_(simde__m128i a, simde__m128i b, simde__m128i c) {
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  const auto aa = simde__m128i_to_private(a);
++  const auto bb = simde__m128i_to_private(b);
++  const auto cc = simde__m128i_to_private(c);
++  // Guest byte order is reversed within each input. Bit 4 selects b;
++  // higher control bits are ignored by vperm.
++  const uint8x16x2_t table = {{aa.neon_u8, bb.neon_u8}};
++  const auto index = veorq_u8(vandq_u8(cc.neon_u8, vdupq_n_u8(31)), vdupq_n_u8(15));
++  simde__m128i_private result;
++  result.neon_u8 = vqtbl2q_u8(table, index);
++  return simde__m128i_from_private(result);
++#else
+   simde__m128i d = simde_mm_set1_epi8(0xF);
+   simde__m128i e = simde_mm_sub_epi8(d, simde_mm_and_si128(c, d));
+   return simde_mm_blendv_epi8(simde_mm_shuffle_epi8(a, e), simde_mm_shuffle_epi8(b, e),
+                               simde_mm_slli_epi32(c, 3));
++#endif
+ }
+ 
+ // Unsigned 8-bit compare greater than
+@@ -392,6 +405,16 @@
+ 
+ // Variable 16-bit shift left: widen to 32-bit, shift, narrow back
+ inline simde__m128i simde_mm_sllv_epi16(simde__m128i a, simde__m128i count) {
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  const auto aa = simde__m128i_to_private(a);
++  const auto cc = simde__m128i_to_private(count);
++  // NEON uses signed low-byte counts. Clamp first so large unsigned
++  // counts retain the widening implementation's zero/sign-fill behavior.
++  const auto shift = vreinterpretq_s16_u16(vminq_u16(cc.neon_u16, vdupq_n_u16(16)));
++  simde__m128i_private result;
++  result.neon_u16 = vshlq_u16(aa.neon_u16, shift);
++  return simde__m128i_from_private(result);
++#else
+   simde__m128i zero = simde_mm_setzero_si128();
+   simde__m128i a_lo = simde_mm_unpacklo_epi16(a, zero);
+   simde__m128i a_hi = simde_mm_unpackhi_epi16(a, zero);
+@@ -403,10 +426,20 @@
+   r_lo = simde_mm_and_si128(r_lo, mask16);
+   r_hi = simde_mm_and_si128(r_hi, mask16);
+   return simde_mm_packus_epi32(r_lo, r_hi);
++#endif
+ }
+ 
+ // Variable 16-bit logical right shift: widen to 32-bit, shift, narrow back
+ inline simde__m128i simde_mm_srlv_epi16(simde__m128i a, simde__m128i count) {
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  const auto aa = simde__m128i_to_private(a);
++  const auto cc = simde__m128i_to_private(count);
++  const auto shift = vnegq_s16(
++      vreinterpretq_s16_u16(vminq_u16(cc.neon_u16, vdupq_n_u16(16))));
++  simde__m128i_private result;
++  result.neon_u16 = vshlq_u16(aa.neon_u16, shift);
++  return simde__m128i_from_private(result);
++#else
+   simde__m128i zero = simde_mm_setzero_si128();
+   simde__m128i a_lo = simde_mm_unpacklo_epi16(a, zero);
+   simde__m128i a_hi = simde_mm_unpackhi_epi16(a, zero);
+@@ -415,10 +448,20 @@
+   simde__m128i r_lo = simde_mm_srlv_epi32(a_lo, s_lo);
+   simde__m128i r_hi = simde_mm_srlv_epi32(a_hi, s_hi);
+   return simde_mm_packus_epi32(r_lo, r_hi);
++#endif
+ }
+ 
+ // Variable 16-bit arithmetic right shift: sign-extend to 32-bit, shift, narrow back
+ inline simde__m128i simde_mm_srav_epi16(simde__m128i a, simde__m128i count) {
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  const auto aa = simde__m128i_to_private(a);
++  const auto cc = simde__m128i_to_private(count);
++  const auto shift = vnegq_s16(
++      vreinterpretq_s16_u16(vminq_u16(cc.neon_u16, vdupq_n_u16(16))));
++  simde__m128i_private result;
++  result.neon_i16 = vshlq_s16(aa.neon_i16, shift);
++  return simde__m128i_from_private(result);
++#else
+   simde__m128i zero = simde_mm_setzero_si128();
+   // Sign-extend a: duplicate each 16-bit lane, then arithmetic shift right by 16
+   simde__m128i a_lo = simde_mm_srai_epi32(simde_mm_unpacklo_epi16(a, a), 16);
+@@ -428,10 +471,19 @@
+   simde__m128i r_lo = simde_mm_srav_epi32(a_lo, s_lo);
+   simde__m128i r_hi = simde_mm_srav_epi32(a_hi, s_hi);
+   return simde_mm_packs_epi32(r_lo, r_hi);
++#endif
+ }
+ 
+ // Variable 8-bit shift left: widen to 16-bit, shift, narrow back
+ inline simde__m128i simde_mm_sllv_epi8(simde__m128i a, simde__m128i count) {
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  const auto aa = simde__m128i_to_private(a);
++  const auto cc = simde__m128i_to_private(count);
++  const auto shift = vreinterpretq_s8_u8(vminq_u8(cc.neon_u8, vdupq_n_u8(8)));
++  simde__m128i_private result;
++  result.neon_u8 = vshlq_u8(aa.neon_u8, shift);
++  return simde__m128i_from_private(result);
++#else
+   simde__m128i zero = simde_mm_setzero_si128();
+   simde__m128i a_lo = simde_mm_unpacklo_epi8(a, zero);
+   simde__m128i a_hi = simde_mm_unpackhi_epi8(a, zero);
+@@ -443,6 +495,7 @@
+   r_lo = simde_mm_and_si128(r_lo, mask8);
+   r_hi = simde_mm_and_si128(r_hi, mask8);
+   return simde_mm_packus_epi16(r_lo, r_hi);
++#endif
+ }
+ 
+ }  // namespace rex::ppc

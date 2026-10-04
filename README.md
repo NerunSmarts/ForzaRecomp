@@ -86,10 +86,11 @@ For custom capture runs, `FH1_CAPTURE_DELAY_MS` delays the first capture and
 captures keeps GPU readback out of a CPU profile; normal launches create no
 capture worker unless `FH1_CAPTURE_FRAME` is set.
 
-The patched runtime reuses presenter pipelines and backs off the guest's
-low-priority scheduler polling. These reduce unnecessary menu work. Videos
-still use the translated WMV software decoder; sustained thermal behavior
-remains under investigation.
+The patched runtime reuses presenter pipelines, backs off low-priority guest
+scheduler polling, and uses ARM vector operations for decoder permutations and
+shifts. Videos still use the translated WMV software decoder. The user reports
+slower onset of thermal throttling after the first two fixes; sustained thermal
+behavior remains under investigation.
 
 `.gitignore` excludes the disc tree, translated game code, decrypted images,
 native binaries, SDK downloads, logs, saves, and credentials. The publication

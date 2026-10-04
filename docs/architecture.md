@@ -109,6 +109,22 @@ Only generated files using this helper include the host threading header.
 This changes host scheduling latency and needs extended gameplay validation.
 It does not replace the media facade's WMV software decoder.
 
+`patches/0011-use-arm-vector-integer-operations.patch` adds ARM64 NEON paths
+for byte permutation and variable 8- and 16-bit shifts used by the decoder.
+Permutation uses one two-vector table lookup with the existing guest byte
+order. Shifts operate on their original lane width, avoiding widening and
+narrowing sequences. Counts are clamped before conversion to NEON's signed
+counts, preserving zero and sign-fill results for large unsigned counts.
+Other architectures retain the existing implementations.
+
+The VMX smoke tool checks all 65,536 halfword shift counts on edge values,
+all byte value/count pairs, all permutation controls, and mixed random lanes
+against scalar references. Both native NEON and the portable SIMD fallback
+pass. A local dependent-loop benchmark shows roughly 1.5x faster permutations
+and 3x faster halfword shifts; these are helper measurements, not whole-game
+speedups. ARM's [NEON reference](https://arm-software.github.io/acle/neon_intrinsics/advsimd.html)
+documents the table-lookup and shift intrinsics used here.
+
 The FH1 host also enables the existing `gpu_allow_invalid_fetch_constants`
 compatibility option after the GPU plugin registers its flags. Explicit user
 settings override this default. The graphics issues and this option were

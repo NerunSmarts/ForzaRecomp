@@ -1,8 +1,11 @@
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <random>
 
 #include <rex/ppc/intrinsics.h>
 
@@ -29,6 +32,107 @@ void expectNaN(const char* label, simde__m128 value) {
       std::cerr << label << ": lane " << lane << " is not NaN\n";
       ++failures;
     }
+}
+
+template <typename T, size_t N>
+bool expectInteger(const char* label, simde__m128i value, const std::array<T, N>& expected) {
+  static_assert(sizeof(expected) == 16);
+  std::array<T, N> actual{};
+  simde_mm_storeu_si128(reinterpret_cast<simde__m128i*>(actual.data()), value);
+  for (size_t lane = 0; lane < N; ++lane) {
+    if (actual[lane] != expected[lane]) {
+      std::cerr << label << ": lane " << lane << " expected " << unsigned(expected[lane])
+                << ", got " << unsigned(actual[lane]) << '\n';
+      ++failures;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool checkShifts16(const std::array<uint16_t, 8>& values,
+                   const std::array<uint16_t, 8>& counts) {
+  const auto input = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(values.data()));
+  const auto shifts = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(counts.data()));
+  std::array<uint16_t, 8> left{}, logical{}, arithmetic{};
+  for (size_t lane = 0; lane < values.size(); ++lane) {
+    const unsigned count = counts[lane];
+    left[lane] = count < 16 ? uint16_t(uint32_t(values[lane]) << count) : 0;
+    logical[lane] = count < 16 ? uint16_t(values[lane] >> count) : 0;
+    const auto signed_value = std::bit_cast<int16_t>(values[lane]);
+    arithmetic[lane] = uint16_t(int32_t(signed_value) >> std::min(count, 15u));
+  }
+  return expectInteger("16-bit left shift", rex::ppc::simde_mm_sllv_epi16(input, shifts), left) &&
+         expectInteger("16-bit logical right shift", rex::ppc::simde_mm_srlv_epi16(input, shifts), logical) &&
+         expectInteger("16-bit arithmetic right shift", rex::ppc::simde_mm_srav_epi16(input, shifts), arithmetic);
+}
+
+bool checkShift8(const std::array<uint8_t, 16>& values,
+                 const std::array<uint8_t, 16>& counts) {
+  const auto input = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(values.data()));
+  const auto shifts = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(counts.data()));
+  std::array<uint8_t, 16> expected{};
+  for (size_t lane = 0; lane < values.size(); ++lane)
+    expected[lane] = counts[lane] < 8 ? uint8_t(unsigned(values[lane]) << counts[lane]) : 0;
+  return expectInteger("8-bit left shift", rex::ppc::simde_mm_sllv_epi8(input, shifts), expected);
+}
+
+bool checkPermutation(const std::array<uint8_t, 16>& a, const std::array<uint8_t, 16>& b,
+                      const std::array<uint8_t, 16>& controls) {
+  const auto av = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(a.data()));
+  const auto bv = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(b.data()));
+  const auto cv = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(controls.data()));
+  std::array<uint8_t, 16> expected{};
+  for (size_t lane = 0; lane < controls.size(); ++lane) {
+    const unsigned index = 15 - (controls[lane] & 15);
+    expected[lane] = (controls[lane] & 16) ? b[index] : a[index];
+  }
+  return expectInteger("byte permutation", rex::ppc::simde_mm_perm_epi8_(av, bv, cv), expected);
+}
+
+void checkIntegerHelpers() {
+  const std::array<uint16_t, 8> edge_values{0, 1, 0x7FFF, 0x8000, 0xFFFF, 0x1234, 0xAAAA, 0x5555};
+  // Include every unsigned count, especially counts that NEON interprets as
+  // negative if passed directly (128, 255, 32768 and 65535).
+  for (unsigned count = 0; count <= 65535; ++count) {
+    std::array<uint16_t, 8> counts{};
+    counts.fill(uint16_t(count));
+    if (!checkShifts16(edge_values, counts)) return;
+  }
+  for (unsigned value = 0; value <= 255; ++value) {
+    std::array<uint8_t, 16> values{};
+    values.fill(uint8_t(value));
+    for (unsigned count = 0; count <= 255; ++count) {
+      std::array<uint8_t, 16> counts{};
+      counts.fill(uint8_t(count));
+      if (!checkShift8(values, counts)) return;
+    }
+  }
+  std::array<uint8_t, 16> a{}, b{}, controls{};
+  for (size_t lane = 0; lane < a.size(); ++lane) {
+    a[lane] = uint8_t(0x20 + lane);
+    b[lane] = uint8_t(0x90 + lane);
+  }
+  for (unsigned control = 0; control <= 255; ++control) {
+    for (size_t lane = 0; lane < controls.size(); ++lane)
+      controls[lane] = uint8_t(control + lane);
+    if (!checkPermutation(a, b, controls)) return;
+  }
+  std::mt19937 random(0x4D5309C9);
+  for (unsigned trial = 0; trial < 10000; ++trial) {
+    std::array<uint16_t, 8> values{}, counts{};
+    for (size_t lane = 0; lane < values.size(); ++lane) {
+      values[lane] = uint16_t(random());
+      counts[lane] = uint16_t(random() & ((trial & 1) ? 15 : 65535));
+    }
+    if (!checkShifts16(values, counts)) return;
+    for (size_t lane = 0; lane < a.size(); ++lane) {
+      a[lane] = uint8_t(random());
+      b[lane] = uint8_t(random() & ((trial & 1) ? 7 : 255));
+      controls[lane] = uint8_t(random());
+    }
+    if (!checkShift8(a, b) || !checkPermutation(a, b, controls)) return;
+  }
 }
 }
 
@@ -69,7 +173,8 @@ int main() {
              std::numeric_limits<float>::denorm_min(), 0, 0, 0), vector(maximum, 1, 1, 0)), 0);
   expectBits("denormal output flush", guestDotProduct<false>(vector(
              std::numeric_limits<float>::min(), 0, 0, 0), vector(0.25f, 1, 1, 0)), 0);
+  checkIntegerHelpers();
   if (failures)
     return 1;
-  std::cout << "VMX fusion, lane order, overflow, non-finite inputs and denormals passed\n";
+  std::cout << "VMX floating-point, integer shifts and byte permutations passed\n";
 }

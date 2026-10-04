@@ -1,5 +1,5 @@
 Validated on Apple Silicon macOS on 2026-10-03 with ReXGlue 0.10.0 at
-`c94f5ebdcb3c9d1a460ca48e04f9758448f8d518` and ten local SDK patches.
+`c94f5ebdcb3c9d1a460ca48e04f9758448f8d518` and eleven local SDK patches.
 This is a working native boot and presentation bring-up. Full gameplay and an
 iOS build remain unverified.
 
@@ -10,15 +10,18 @@ iOS build remain unverified.
 | ARM64 Release executable and two native facade libraries | Build passes |
 | Three simultaneous XEX allocations | Patched runtime passes; original SDK fails |
 | Repeated facade load, unregister on unload, reload | Pass for media and speech; main dispatch survives |
-| Bounded 30- and 60-second boot diagnostics | Processes remain alive; timeout stops are intentional |
+| Bounded 30-, 50- and 60-second boot diagnostics | Processes remain alive; timeout stops are intentional |
 | Animated startup logos and Press Start background | Successive 1280×720 guest captures show changing frames |
 | Window presentation | Windowed launch displays video; user confirmed visible output |
 | Audio | User confirmed audible output |
 | Transparent UI artifacts | User confirmed stable after presenter-cache and worker-wait fixes |
 | Menu CPU comparison | Early playback snapshots: approximately 213% before worker backoff, 167% after |
+| Menu thermals | User reports slower onset of throttling after presenter caching and worker backoff; throttling persists |
 | World loading and input | Passes the earlier missing callbacks; driving HUD and throttle response observed |
 | World geometry | Road and car remain missing; full gameplay is not established |
 | VMX arithmetic helpers | Fusion, signed zero, lane order, overflow, non-finite inputs and denormals pass |
+| ARM integer vector helpers | Full shift-count ranges, byte value/count pairs, permutation controls and mixed random lanes pass scalar references |
+| ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
 | Public-tree and malformed-XEX checks | Five tests pass; publication audit passes |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
@@ -37,10 +40,18 @@ plugin includes the texture exponent-bias and empty-resolve fixes described in
 The menu performance work removes repeated presenter pipeline compilation and
 a full-core scheduler polling loop. CPU usage percentages use macOS's
 per-core convention: 100% is one fully occupied core. The comparison is a
-short diagnostic, not a sustained thermal benchmark. The media facade still
-decodes 1280×720 WMV3 videos in translated guest code; native or accelerated
-video decoding is not implemented. Further performance work should profile
-that decoder separately from GPU compilation and rendering.
+short diagnostic, not a sustained thermal benchmark. ARM integer-vector paths
+also reduce the decoder's permutation and shift overhead; isolated helper
+benchmarks show roughly 1.5x and 3x speedups respectively. These numbers do not
+describe whole-game performance. The media facade still decodes 1280×720 WMV3
+videos in translated guest code. A host video decoder bridge and hardware
+decoding are not implemented. Further performance work should profile that
+decoder separately from GPU compilation and rendering.
+
+The final ARM playback check measures process CPU-time deltas without a stack
+sampler, and delays framebuffer readback until 40 seconds. It is a short
+functional and CPU check, with no controlled temperature or clock measurement.
+Longer thermal behavior after the integer-vector changes remains unverified.
 
 Remaining validation covers complete world rendering, driving, collision,
 saves, facade unload during real guest execution, and extended runtime
