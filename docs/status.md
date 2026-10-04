@@ -66,7 +66,8 @@ The existing Windows repository was reviewed in an isolated, ignored clone.
 Its logo is preserved byte-for-byte at `ForzaRecompResources/logo.png` and
 appears in the README. Its previous tree includes generated game code and
 native libraries, so that tree and history have not been imported into this
-project's public branch. No remote branches have been changed.
+project's public `main` branch. The original `master` history is preserved
+separately.
 
 Game files, generated code,
 decrypted images, binaries, captures, logs, saves, SDK downloads, and local
