@@ -1,0 +1,67 @@
+diff --git a/src/system/kernel_state.cpp b/src/system/kernel_state.cpp
+index 697399c..cfaff13 100644
+--- a/src/system/kernel_state.cpp
++++ b/src/system/kernel_state.cpp
+@@ -16,9 +16,11 @@
+ 
+ #include <fmt/format.h>
+ #include <rex/assert.h>
++#include <rex/filesystem.h>
+ #include <rex/image_info.h>
+ #include <rex/logging.h>
+ #include <rex/math.h>
++#include <rex/platform.h>
+ #include <rex/ppc/function.h>
+ #include <rex/runtime.h>
+ #include <rex/stream.h>
+@@ -704,6 +706,9 @@ object_ref<UserModule> KernelState::LoadUserModule(const std::string_view raw_na
+     path = rex::string::utf8_join_guest_paths(
+         rex::string::utf8_find_base_guest_path(executable_module_->path()), name);
+   }
++  if (auto entry = file_system_->ResolvePath(path)) {
++    path = entry->absolute_path();
++  }
+ 
+   // loading_paths_ serializes concurrent loaders of the same path; we
+   // can't hold the global lock across LoadFromFile or DllMain ATTACH.
+@@ -759,9 +764,25 @@ object_ref<UserModule> KernelState::LoadUserModule(const std::string_view raw_na
+     }
+ 
+     rex::platform::DynamicLibrary library_local;
+-    if (!library_local.Load(std::filesystem::path(recomp->shared_lib_name),
++    auto library_path = std::filesystem::path(recomp->shared_lib_name);
++    if (!library_path.has_extension()) {
++#if REX_PLATFORM_WIN32
++      library_path += ".dll";
++#elif REX_PLATFORM_MAC
++      library_path = library_path.parent_path() /
++                     ("lib" + library_path.filename().string() + ".dylib");
++#else
++      library_path = library_path.parent_path() /
++                     ("lib" + library_path.filename().string() + ".so");
++#endif
++    }
++    if (library_path.is_relative()) {
++      library_path = rex::filesystem::GetExecutableFolder() / library_path;
++    }
++    if (!library_local.Load(library_path,
+                             rex::platform::SymbolResolution::kImmediate)) {
+-      REXSYS_ERROR("Failed to load shared library for module '{}'", recomp->pe_name);
++      REXSYS_ERROR("Failed to load shared library '{}' for module '{}'",
++                   library_path.string(), recomp->pe_name);
+     } else {
+       auto register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(
+           library_local.GetRawSymbol("ReXModule_Register"));
+@@ -918,6 +939,12 @@ std::optional<KernelState::RecompiledModuleInfo> KernelState::FindRecompiledModu
+   for (const auto& info : recompiled_modules_) {
+     if (info.guest_path == normalized)
+       return info;
++    // UserModule stores the resolved device path, while manifests register
++    // paths relative to game:. Compare through the VFS for unload/reload and
++    // relative guest loads without conflating modules with equal basenames.
++    auto entry = file_system_->ResolvePath("game:\\" + info.guest_path);
++    if (entry && NormalizeGuestPath(entry->absolute_path()) == normalized)
++      return info;
+   }
+   return std::nullopt;
+ }

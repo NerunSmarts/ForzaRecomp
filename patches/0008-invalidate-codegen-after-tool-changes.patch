@@ -1,0 +1,44 @@
+diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
+index 5de4b70..1d10903 100644
+--- a/src/rexglue/CMakeLists.txt
++++ b/src/rexglue/CMakeLists.txt
+@@ -22,6 +22,7 @@ target_include_directories(rexglue
+ target_link_libraries(rexglue
+     PRIVATE
+         rexcodegen
++        xxHash::xxhash
+ )
+ 
+ rex_target_pch(rexglue <CLI/CLI.hpp>)
+diff --git a/src/rexglue/commands/codegen_command.cpp b/src/rexglue/commands/codegen_command.cpp
+index df7a2e8..a691668 100644
+--- a/src/rexglue/commands/codegen_command.cpp
++++ b/src/rexglue/commands/codegen_command.cpp
+@@ -25,6 +25,8 @@
+ #include <rex/codegen/manifest.h>
+ #include <rex/codegen/project_recompiler.h>
+ #include <rex/logging.h>
++#include <rex/filesystem.h>
++#include <rex/hash.h>
+ #include <rex/version.h>
+ 
+ namespace rexglue::cli {
+@@ -73,12 +75,16 @@ Result<void> RecompileProject(const fs::path& manifest_path, const CliContext& c
+   std::string title = fmt::format("Recompiling {}", manifest->projectName);
+   rex::codegen::ProjectRecompiler recompiler(std::move(*manifest));
+   ui::ProgressView progress(title);
++  // Local codegen patches may retain the release version. Fingerprint the
++  // actual tool so every module is regenerated after changing its builders.
++  const auto tool_digest = rex::hash_file(rex::filesystem::GetExecutablePath());
+   rex::codegen::ProjectRecompilerOptions opts{
+       .targets = targets,
+       .force = ctx.generate_despite_errors,
+       .reporter = &progress,
+-      .ignoreStamp = ignore_stamp,
+-      .sdkVersion = REXGLUE_VERSION_FLOOR "-" REXGLUE_VERSION_CHANNEL,
++      .ignoreStamp = ignore_stamp || tool_digest.empty(),
++      .sdkVersion = fmt::format("{}-{}:{}", REXGLUE_VERSION_FLOOR, REXGLUE_VERSION_CHANNEL,
++                                tool_digest),
+   };
+   auto result = recompiler.Run(opts);
+   if (!result)

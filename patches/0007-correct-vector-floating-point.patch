@@ -1,0 +1,123 @@
+diff --git a/include/rex/ppc/intrinsics.h b/include/rex/ppc/intrinsics.h
+index 3c2fe09..d2d2d3d 100644
+--- a/include/rex/ppc/intrinsics.h
++++ b/include/rex/ppc/intrinsics.h
+@@ -14,6 +14,7 @@
+ #pragma once
+ 
+ #include <climits>
++#include <bit>
+ #include <cmath>
+ #include <cstring>
+ 
+@@ -30,6 +31,57 @@
+ 
+ namespace rex::ppc {
+ 
++// VMX multiply-add rounds once. The portable fallback must retain fusion too.
++inline simde__m128 fusedMultiplyAdd(simde__m128 a, simde__m128 b, simde__m128 c) {
++  const auto aa = simde__m128_to_private(a);
++  const auto bb = simde__m128_to_private(b);
++  const auto cc = simde__m128_to_private(c);
++  simde__m128_private result;
++#if defined(SIMDE_ARM_NEON_A64V8_NATIVE)
++  result.neon_f32 = vfmaq_f32(cc.neon_f32, aa.neon_f32, bb.neon_f32);
++#else
++  for (size_t lane = 0; lane < 4; ++lane)
++    result.f32[lane] = std::fma(aa.f32[lane], bb.f32[lane], cc.f32[lane]);
++#endif
++  return simde__m128_from_private(result);
++}
++
++inline simde__m128 negativeMultiplySubtract(simde__m128 a, simde__m128 b, simde__m128 c) {
++  const auto sign = simde_mm_castsi128_ps(simde_mm_set1_epi32(int32_t(0x80000000u)));
++  // Negate after the fused subtraction, including its signed-zero result.
++  return simde_mm_xor_ps(fusedMultiplyAdd(a, b, simde_mm_xor_ps(c, sign)), sign);
++}
++
++inline float flushVectorSubnormal(float value) {
++  const uint32_t bits = std::bit_cast<uint32_t>(value);
++  return (bits & 0x7FFFFFFFu) < 0x00800000u
++      ? std::bit_cast<float>(bits & 0x80000000u) : value;
++}
++
++template <bool FourLanes>
++inline simde__m128 guestDotProduct(simde__m128 a, simde__m128 b) {
++  const auto aa = simde__m128_to_private(a);
++  const auto bb = simde__m128_to_private(b);
++  // Host lanes are reversed relative to guest x/y/z/w. Follow Xenia Canary's
++  // double accumulation: (x + z) + y, or (x + z) + (y + w).
++  const double x = double(flushVectorSubnormal(aa.f32[3])) * double(flushVectorSubnormal(bb.f32[3]));
++  const double y = double(flushVectorSubnormal(aa.f32[2])) * double(flushVectorSubnormal(bb.f32[2]));
++  const double z = double(flushVectorSubnormal(aa.f32[1])) * double(flushVectorSubnormal(bb.f32[1]));
++  double sum;
++  if constexpr (FourLanes) {
++    const double w = double(flushVectorSubnormal(aa.f32[0])) * double(flushVectorSubnormal(bb.f32[0]));
++    sum = (x + z) + (y + w);
++  } else {
++    sum = (x + z) + y;
++  }
++  float value = static_cast<float>(sum);
++  // Finite dot-product overflow yields canonical QNaN on Xenon. Preserve
++  // infinity or NaN originating in the operands rather than mapping all infs.
++  if (std::isfinite(sum) && std::isinf(value))
++    value = std::bit_cast<float>(0x7FC00000u);
++  return simde_mm_set1_ps(flushVectorSubnormal(value));
++}
++
+ //=============================================================================
+ // Vector Load/Store Mask Tables
+ //=============================================================================
+diff --git a/src/codegen/builders/vector.cpp b/src/codegen/builders/vector.cpp
+index cbdd7f7..fc9adcc 100644
+--- a/src/codegen/builders/vector.cpp
++++ b/src/codegen/builders/vector.cpp
+@@ -93,21 +93,20 @@ bool build_vmulfp128(BuilderContext& ctx) {
+ bool build_vmaddfp(BuilderContext& ctx) {
+   ctx.emit_set_flush_mode(true);
+   ctx.println(
+-      "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+-      "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
++      "\tsimde_mm_store_ps({}.f32, rex::ppc::fusedMultiplyAdd(simde_mm_load_ps({}.f32), "
++      "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));",
+       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+       ctx.v(ctx.insn.operands[3]));
+   return true;
+ }
+ 
+ bool build_vnmsubfp(BuilderContext& ctx) {
+-  // vnmsubfp: vD = -(vA * vB - vC) - negation done by XOR with sign bit (0x80000000)
++  // vnmsubfp: vD = -(vA * vB - vC), with one rounding before negation.
+   ctx.emit_set_flush_mode(true);
+   ctx.println(
+       "\tsimde_mm_store_ps({}.f32, "
+-      "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+-      "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
+-      "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
++      "rex::ppc::negativeMultiplySubtract(simde_mm_load_ps({}.f32), "
++      "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));",
+       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+       ctx.v(ctx.insn.operands[3]));
+   return true;
+@@ -188,8 +187,8 @@ bool build_vmsum3fp128(BuilderContext& ctx) {
+   // 0xEF = dot(yzw) with result broadcast to all elements (see constants doc)
+   ctx.emit_set_flush_mode(true);
+   ctx.println(
+-      "\tsimde_mm_store_ps({}.f32, simde_mm_dp_ps(simde_mm_load_ps({}.f32), "
+-      "simde_mm_load_ps({}.f32), 0xEF));",
++      "\tsimde_mm_store_ps({}.f32, rex::ppc::guestDotProduct<false>(simde_mm_load_ps({}.f32), "
++      "simde_mm_load_ps({}.f32)));",
+       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+   return true;
+ }
+@@ -198,8 +197,8 @@ bool build_vmsum4fp128(BuilderContext& ctx) {
+   // 4-element dot product: 0xFF = all 4 elements, result to all (see constants doc)
+   ctx.emit_set_flush_mode(true);
+   ctx.println(
+-      "\tsimde_mm_store_ps({}.f32, simde_mm_dp_ps(simde_mm_load_ps({}.f32), "
+-      "simde_mm_load_ps({}.f32), 0xFF));",
++      "\tsimde_mm_store_ps({}.f32, rex::ppc::guestDotProduct<true>(simde_mm_load_ps({}.f32), "
++      "simde_mm_load_ps({}.f32)));",
+       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+   return true;
+ }

@@ -1,0 +1,34 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "mac-arm64-release",
+      "displayName": "Apple Silicon macOS (patched Release SDK)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/mac-arm64",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "rexglue_DIR": "${sourceDir}/.tools/rexglue-patched/lib/cmake/rexglue"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mac-arm64-release",
+      "configurePreset": "mac-arm64-release",
+      "jobs": 4
+    }
+  ]
+}

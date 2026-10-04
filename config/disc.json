@@ -1,0 +1,18 @@
+{
+  "title_id": "4D5309C9",
+  "media_id": "2DC7007B",
+  "modules": {
+    "default.xex": {
+      "sha256": "db40df605ade49a612b35a7a24c38f6004bcb17a88ed6b48288de16df9e3987c",
+      "base": "82000000", "size": "01620000", "entry": "82A6FBC0"
+    },
+    "XMediaFacade_default.xex": {
+      "sha256": "ed285beefeafcdc90cf64d6085d19c874e3f1e15072c12cdf9ba2237c88e2ce5",
+      "base": "88000000", "size": "002B0000", "entry": "88050800"
+    },
+    "SpeechFacade_default.xex": {
+      "sha256": "d54f6aae6ae2fd6da9b8c37d48f0a6bb295caa18ad82d0d9df66026141a41594",
+      "base": "89000000", "size": "00240000", "entry": "890A0468"
+    }
+  }
+}

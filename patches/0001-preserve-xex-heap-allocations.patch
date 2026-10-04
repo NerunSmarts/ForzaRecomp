@@ -1,0 +1,87 @@
+diff --git a/include/rex/system/xex_module.h b/include/rex/system/xex_module.h
+index 2ba62d7..7ae5dbd 100644
+--- a/include/rex/system/xex_module.h
++++ b/include/rex/system/xex_module.h
+@@ -218,6 +218,7 @@ class XexModule : public Module {
+   bool is_dev_kit_ = false;
+ 
+   bool loaded_ = false;         // Loaded into memory?
++  bool image_allocation_owned_ = false;  // Only release allocations made by this module.
+   bool finished_load_ = false;  // PE/imports/symbols/etc all loaded?
+ 
+   uint32_t base_address_ = 0;
+diff --git a/src/system/xex_module.cpp b/src/system/xex_module.cpp
+index 0726516..22d2417 100644
+--- a/src/system/xex_module.cpp
++++ b/src/system/xex_module.cpp
+@@ -460,8 +460,6 @@ int XexModule::ReadImage(const void* xex_addr, size_t xex_length, bool use_dev_k
+     return 0;
+   }
+ 
+-  memory()->LookupHeap(base_address_)->Reset();
+-
+   aes_decrypt_buffer(use_dev_key ? xe_xex2_devkit_key : xe_xex2_retail_key,
+                      reinterpret_cast<const uint8_t*>(xex_security_info()->aes_key), 16,
+                      session_key_, 16);
+@@ -482,16 +480,16 @@ int XexModule::ReadImage(const void* xex_addr, size_t xex_length, bool use_dev_k
+       return 2;
+   }
+ 
+-  if (result_code) {
+-    return result_code;
++  if (!result_code && !is_valid_executable()) {
++    result_code = 3;
+   }
+-
+-  if (is_patch() || is_valid_executable()) {
+-    return 0;
++  // A key retry must release only this image. Resetting the heap also forgets
++  // every other XEX and its function table, breaking multi-module titles.
++  if (result_code && image_allocation_owned_) {
++    memory()->LookupHeap(base_address_)->Release(base_address_);
++    image_allocation_owned_ = false;
+   }
+-
+-  // Not a patch and image doesn't have proper PE header, return 3
+-  return 3;
++  return result_code;
+ }
+ 
+ int XexModule::ReadImageUncompressed(const void* xex_addr, size_t xex_length) {
+@@ -511,6 +509,7 @@ int XexModule::ReadImageUncompressed(const void* xex_addr, size_t xex_length) {
+     return 2;
+   }
+   uint8_t* buffer = memory()->TranslateVirtual(base_address_);
++  image_allocation_owned_ = true;
+   std::memset(buffer, 0, uncompressed_size);
+ 
+   const uint8_t* p = (const uint8_t*)xex_addr + xex_header()->header_size;
+@@ -575,6 +574,7 @@ int XexModule::ReadImageBasicCompressed(const void* xex_addr, size_t xex_length)
+   }
+ 
+   uint8_t* buffer = memory()->TranslateVirtual(base_address_);
++  image_allocation_owned_ = true;
+   std::memset(buffer, 0, total_size);  // Quickly zero the contents.
+   uint8_t* d = buffer;
+ 
+@@ -715,6 +715,7 @@ int XexModule::ReadImageCompressed(const void* xex_addr, size_t xex_length) {
+                 rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite);
+ 
+     if (alloc_result) {
++      image_allocation_owned_ = true;
+       uint8_t* buffer = memory()->TranslateVirtual(base_address_);
+       std::memset(buffer, 0, uncompressed_size);
+ 
+@@ -1045,10 +1046,11 @@ bool XexModule::Unload() {
+   loaded_ = false;
+ 
+   // If this isn't a patch, just deallocate the memory occupied by the exe
+-  if (!is_patch()) {
++  if (!is_patch() && image_allocation_owned_) {
+     assert_not_zero(base_address_);
+ 
+     memory()->LookupHeap(base_address_)->Release(base_address_);
++    image_allocation_owned_ = false;
+   }
+ 
+   xex_header_mem_.resize(0);

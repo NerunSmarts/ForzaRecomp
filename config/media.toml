@@ -1,0 +1,25 @@
+# Virtual dispatch thunk; the following function starts at 88055B90.
+[functions]
+"0x88055B80" = { size = 0x10 }
+# Static initialization thunks reached indirectly during facade startup.
+"0x882435D8" = { size = 0x0C }
+"0x882435E8" = { size = 0x18 }
+
+# Additional table entries following indirect tail-call boundaries.
+"0x88065498" = { size = 0x18 }
+"0x88067730" = { size = 0x8 }
+"0x88067750" = { size = 0x8 }
+"0x880678D8" = { size = 0x20 }
+"0x880678F8" = { size = 0x20 }
+"0x88067918" = { size = 0x20 }
+"0x88067938" = { size = 0x20 }
+"0x88067958" = { size = 0x20 }
+"0x88067978" = { size = 0x20 }
+"0x88067998" = { size = 0x20 }
+"0x880679B8" = { size = 0x20 }
+"0x880679D8" = { size = 0x20 }
+"0x880679F8" = { size = 0x20 }
+"0x880CD528" = { size = 0x8 }
+
+# Verified short callbacks materialized by nearby lis/addi and static tables.
+"0x88069278" = { size = 0x10 }
