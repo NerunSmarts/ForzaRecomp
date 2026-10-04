@@ -26,6 +26,7 @@ def audit(environment=None):
                     and name != "generated/rexglue.cmake"
                     and path.suffix.lower() not in {".cpp", ".h"})
         private |= path.name.startswith(".env") and path.name != ".env.example"
+        private |= ".spv." in path.name.lower() or ".ucode." in path.name.lower()
         if private:
             bad.append(name)
     if bad:

@@ -1,0 +1,437 @@
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index 696ff48..1da39dd 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -538,6 +538,8 @@ class VulkanCommandProcessor : public CommandProcessor {
+   // Guest frame index, since some transient resources can be reused across
+   // submissions. Values updated in the beginning of a frame.
+   uint64_t frame_current_ = 1;
++  uint64_t trace_draw_frame_ = 0;
++  uint32_t trace_draw_index_ = 0;
+   uint64_t frame_completed_ = 0;
+   // Submission indices of frames that have already been submitted.
+   uint64_t closed_frame_submissions_[kMaxFramesInFlight] = {};
+diff --git a/include/rex/graphics/vulkan/pipeline_cache.h b/include/rex/graphics/vulkan/pipeline_cache.h
+index 7b938b9..97da3c1 100644
+--- a/include/rex/graphics/vulkan/pipeline_cache.h
++++ b/include/rex/graphics/vulkan/pipeline_cache.h
+@@ -416,6 +416,7 @@ class VulkanPipelineCache {
+   // shader interlock when no Xenos pixel shader provided.
+   VkShaderModule depth_only_fragment_shader_ = VK_NULL_HANDLE;
+   VkShaderModule placeholder_pixel_shader_ = VK_NULL_HANDLE;
++  VkShaderModule wireframe_pixel_shader_ = VK_NULL_HANDLE;
+   // Depth-only shaders for float24 emulation when no Xenos pixel shader is
+   // provided in host render target mode.
+   VkShaderModule depth_float24_truncate_fragment_shader_ = VK_NULL_HANDLE;
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 001f36b..61c7a4f 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -31,6 +31,7 @@
+ #include <rex/graphics/util/draw.h>
+ #include <rex/graphics/flags.h>
+ #include <rex/graphics/pipeline/shader/shader.h>
++#include <rex/graphics/pipeline/shader/interpreter.h>
+ #include <rex/graphics/pipeline/shader/spirv_translator.h>
+ #include <rex/graphics/registers.h>
+ #include <rex/graphics/vulkan/command_processor.h>
+@@ -69,6 +70,9 @@ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
+                     "device (falls back to render passes otherwise)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_INT32(vulkan_draw_trace_interval, 0, "GPU/Vulkan",
++                    "Diagnostic draw logging every N frames; zero disables logging");
++
+ namespace rex::graphics::vulkan {
+ 
+ namespace {
+@@ -3595,6 +3599,31 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
+   const RegisterFile& regs = *register_file_;
++  const int32_t trace_interval = REXCVAR_GET(vulkan_draw_trace_interval);
++  bool trace_draw_enabled = trace_interval > 0 &&
++      frame_current_ % uint32_t(trace_interval) == 0;
++  if (trace_draw_frame_ != frame_current_) {
++    trace_draw_frame_ = frame_current_;
++    trace_draw_index_ = 0;
++  }
++  uint32_t trace_index = trace_draw_index_++;
++  trace_draw_enabled &= trace_index < 12000;
++  auto trace_draw = [&](const char* stage) {
++    if (!trace_draw_enabled) return;
++    auto vs = active_vertex_shader();
++    auto ps = active_pixel_shader();
++    draw_util::Scissor scissor;
++    draw_util::GetScissor(regs, scissor);
++    REXGPU_INFO("DRAWTRACE frame={} draw={} stage={} prim={} count={} vs={:016X} "
++                "ps={:016X} mode={:08X} surface={:08X} depth={:08X} cull={:08X} "
++                "color={:08X}/{:08X} scissor={},{}+{},{}",
++                frame_current_, trace_index, stage, uint32_t(prim_type), index_count,
++                vs ? vs->ucode_data_hash() : 0, ps ? ps->ucode_data_hash() : 0,
++                regs[XE_GPU_REG_RB_MODECONTROL], regs[XE_GPU_REG_RB_SURFACE_INFO],
++                regs[XE_GPU_REG_RB_DEPTHCONTROL], regs[XE_GPU_REG_PA_SU_SC_MODE_CNTL],
++                regs[XE_GPU_REG_RB_COLOR_INFO], regs[XE_GPU_REG_RB_COLOR_MASK],
++                scissor.offset[0], scissor.offset[1], scissor.extent[0], scissor.extent[1]);
++  };
+   (void)index_buffer_info;
+   auto draw_fail = [&](const char* stage) {
+     auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
+@@ -3613,6 +3642,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+   if (edram_mode == xenos::EdramMode::kCopy) {
+     // Special copy handling.
++    trace_draw("copy");
+     return IssueCopy();
+   }
+ 
+@@ -3646,6 +3676,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   if (surface_pitch_is_zero && is_rasterization_done) {
+     // Doesn't actually draw.
+     // Unlikely that zero would even really be legal though.
++    trace_draw("zero_pitch");
+     return true;
+   }
+   VulkanShader* pixel_shader = nullptr;
+@@ -3666,6 +3697,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+     // cache.
+     if (!memexport_used_vertex) {
+       // This draw has no effect.
++      trace_draw("no_effect");
+       return true;
+     }
+   }
+@@ -3713,6 +3745,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+     }
+     if (!primitive_processing_result.host_draw_vertex_count) {
+       // Nothing to draw.
++      trace_draw("zero_vertices");
+       return true;
+     }
+     if (primitive_processing_result.host_primitive_type == xenos::PrimitiveType::kTriangleFan) {
+@@ -3863,6 +3896,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+                                                 &pipeline_is_placeholder);
+   if (REXCVAR_GET(async_shader_compilation) && pipeline_is_placeholder) {
+     frame_used_async_placeholder_pipeline_ = true;
++    trace_draw("placeholder");
+     return true;
+   }
+   if (pipeline == VK_NULL_HANDLE || pipeline_layout_provider == nullptr) {
+@@ -3932,6 +3966,89 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+       host_render_targets_used && render_target_cache_->depth_float24_convert_in_pixel_shader(),
+       host_render_targets_used, pixel_shader && pixel_shader->writes_depth(), viewport_info);
+ 
++  if (trace_draw_enabled) {
++    trace_draw("issued");
++    REXGPU_INFO("DRAWTRACE viewport={},{}+{},{} z={},{} ndc={},{},{}+{},{},{} "
++                "host_count={} color_mask={:04X} textures={:08X}",
++                viewport_info.xy_offset[0], viewport_info.xy_offset[1],
++                viewport_info.xy_extent[0], viewport_info.xy_extent[1],
++                viewport_info.z_min, viewport_info.z_max,
++                viewport_info.ndc_scale[0], viewport_info.ndc_scale[1], viewport_info.ndc_scale[2],
++                viewport_info.ndc_offset[0], viewport_info.ndc_offset[1], viewport_info.ndc_offset[2],
++                primitive_processing_result.host_draw_vertex_count, normalized_color_mask,
++                used_texture_mask);
++    const auto& map = vertex_shader->constant_register_map();
++    for (uint32_t i = 0; i < rex::countof(map.vertex_fetch_bitmap); ++i) {
++      uint32_t bits = map.vertex_fetch_bitmap[i], bit;
++      while (rex::bit_scan_forward(bits, &bit)) {
++        bits &= ~(uint32_t(1) << bit);
++        auto fetch = regs.GetVertexFetch(i * 32 + bit);
++        REXGPU_INFO("DRAWTRACE fetch={} raw={:08X}/{:08X} address={:08X} size={}",
++                    i * 32 + bit, fetch.dword_0, fetch.dword_1, fetch.address << 2,
++                    fetch.size << 2);
++      }
++    }
++    for (uint32_t i = 0; i < 16; ++i) {
++      if (!(map.float_bitmap[0] & (uint64_t(1) << i))) continue;
++      float value[4];
++      std::memcpy(value, &regs[XE_GPU_REG_SHADER_CONSTANT_000_X + i * 4], sizeof(value));
++      REXGPU_INFO("DRAWTRACE c{}={},{},{},{}", i, value[0], value[1], value[2], value[3]);
++    }
++    auto initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
++    if (trace_index % 64 == 0 && index_count >= 3 &&
++        ShaderInterpreter::CanInterpretShader(*vertex_shader) &&
++        (initiator.source_select == xenos::SourceSelect::kDMA ||
++         initiator.source_select == xenos::SourceSelect::kAutoIndex)) {
++      struct PositionSink final : ShaderInterpreter::ExportSink {
++        float position[4] = {};
++        uint32_t mask = 0;
++        void Export(ucode::ExportRegister reg, const float* value, uint32_t value_mask) override {
++          if (reg != ucode::ExportRegister::kVSPosition) return;
++          for (uint32_t i = 0; i < 4; ++i) {
++            if (value_mask & (1 << i)) position[i] = value[i];
++          }
++          mask |= value_mask;
++        }
++      } sink;
++      ShaderInterpreter interpreter(regs, *memory_);
++      interpreter.SetShader(*vertex_shader);
++      interpreter.SetExportSink(&sink);
++      auto dma = regs.Get<reg::VGT_DMA_SIZE>();
++      xenos::Endian endian = dma.swap_mode;
++      bool index16 = initiator.index_size == xenos::IndexFormat::kInt16;
++      if (index16) {
++        if (endian == xenos::Endian::k8in32) endian = xenos::Endian::k8in16;
++        else if (endian == xenos::Endian::k16in32) endian = xenos::Endian::kNone;
++      }
++      const uint8_t* indices = memory_->TranslatePhysical<const uint8_t*>(
++          regs[XE_GPU_REG_VGT_DMA_BASE] & ~(index16 ? 1u : 3u));
++      for (uint32_t i = 0; i < 3; ++i) {
++        uint32_t vertex_index = i;
++        if (initiator.source_select == xenos::SourceSelect::kDMA) {
++          vertex_index = 0;
++          if (i < dma.num_words && indices) {
++            if (index16) {
++              uint16_t word;
++              std::memcpy(&word, indices + i * 2, 2);
++              vertex_index = word;
++            } else std::memcpy(&vertex_index, indices + i * 4, 4);
++            vertex_index = xenos::GpuSwap(vertex_index, endian) & 0xFFFFFF;
++          }
++        }
++        vertex_index = std::min(uint32_t(regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx),
++            std::max(uint32_t(regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx),
++                (vertex_index + regs.Get<reg::VGT_INDX_OFFSET>().indx_offset) & 0xFFFFFF));
++        sink.mask = 0;
++        std::memset(interpreter.temp_registers(), 0, xenos::kMaxShaderTempRegisters * 4 * sizeof(float));
++        interpreter.temp_registers()[0] = float(vertex_index);
++        interpreter.Execute();
++        REXGPU_INFO("DRAWTRACE CPU_POSITION vertex={} mask={:X} xyzw={},{},{},{}",
++                    vertex_index, sink.mask, sink.position[0], sink.position[1],
++                    sink.position[2], sink.position[3]);
++      }
++    }
++  }
++
+   // Update dynamic graphics pipeline state.
+   UpdateDynamicState(viewport_info, primitive_polygonal, normalized_depth_control);
+ 
+@@ -4181,6 +4298,57 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+     }
+   }
+ 
++  if (trace_draw_enabled && trace_index % 512 == 0 &&
++      (constant_map_vertex.vertex_fetch_bitmap[2] & (uint32_t(1) << 31))) {
++    auto fetch = regs.GetVertexFetch(95);
++    const uint32_t address = fetch.address << 2;
++    uint32_t size = address < SharedMemory::kBufferSize
++        ? std::min({uint32_t(fetch.size << 2), uint32_t(65536),
++                    SharedMemory::kBufferSize - address})
++        : 0;
++    if (size >= 16) {
++      const auto* vk = GetVulkanDevice();
++      const auto& dfn = vk->functions();
++      VkBuffer buffer = VK_NULL_HANDLE;
++      VkDeviceMemory memory = VK_NULL_HANDLE;
++      uint32_t memory_type = 0;
++      if (ui::vulkan::util::CreateDedicatedAllocationBuffer(vk, size,
++              VK_BUFFER_USAGE_TRANSFER_DST_BIT, ui::vulkan::util::MemoryPurpose::kReadback,
++              buffer, memory, &memory_type)) {
++        shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
++        SubmitBarriers(true);
++        VkBufferCopy region = {VkDeviceSize(fetch.address << 2), 0, size};
++        deferred_command_buffer_.CmdVkCopyBuffer(shared_memory_->buffer(), buffer, 1, &region);
++        PushBufferMemoryBarrier(buffer, 0, size, VK_PIPELINE_STAGE_TRANSFER_BIT,
++            VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
++        if (AwaitAllQueueOperationsCompletion()) {
++          void* mapping = nullptr;
++          if (dfn.vkMapMemory(vk->device(), memory, 0, VK_WHOLE_SIZE, 0, &mapping) == VK_SUCCESS) {
++            if (!(vk->memory_types().host_coherent & (uint32_t(1) << memory_type))) {
++              VkMappedMemoryRange range = {};
++              range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
++              range.memory = memory;
++              range.size = VK_WHOLE_SIZE;
++              dfn.vkInvalidateMappedMemoryRanges(vk->device(), 1, &range);
++            }
++            auto cpu = memory_->TranslatePhysical<const uint8_t*>(fetch.address << 2);
++            const auto* gpu = static_cast<const uint8_t*>(mapping);
++            uint32_t differences = 0, nonzero = 0;
++            for (uint32_t i = 0; i < size; ++i) {
++              differences += cpu[i] != gpu[i];
++              nonzero += gpu[i] != 0;
++            }
++            REXGPU_INFO("DRAWTRACE GPU_BUFFER frame={} draw={} address={:08X} size={} "
++                        "different_bytes={} nonzero_bytes={}", frame_current_, trace_index,
++                        fetch.address << 2, size, differences, nonzero);
++            dfn.vkUnmapMemory(vk->device(), memory);
++          }
++        }
++        dfn.vkDestroyBuffer(vk->device(), buffer, nullptr);
++        dfn.vkFreeMemory(vk->device(), memory, nullptr);
++      }
++    }
++  }
+   return true;
+ }
+ 
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 91ac08f..5275b7e 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -59,10 +59,34 @@ REXCVAR_DEFINE_BOOL(vulkan_tessellation_wireframe, false, "GPU/Vulkan",
+                     "Render tessellation as wireframe")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(fh1_debug_wireframe, false, "GPU/Vulkan",
++                    "Diagnostic: draw FH1 mesh streams as bright, untextured wireframes")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly)
++    .debug_only();
++
+ namespace rex::graphics::vulkan {
+ 
+ namespace {
+ 
++bool IsFh1MeshShader(const Shader& shader) {
++  // The world/car mesh shaders use VF89 or VF90; the 2D UI uses VF95 alone.
++  return (shader.constant_register_map().vertex_fetch_bitmap[2] &
++          ((uint32_t(1) << 25) | (uint32_t(1) << 26))) != 0;
++}
++
++constexpr std::string_view kWireframePixelShaderSource = R"(#version 460
++layout(location = 0) out vec4 oC0;
++layout(location = 1) out vec4 oC1;
++layout(location = 2) out vec4 oC2;
++layout(location = 3) out vec4 oC3;
++void main() {
++  oC0 = vec4(8.0, 8.0, 8.0, 1.0);
++  oC1 = vec4(8.0, 8.0, 8.0, 1.0);
++  oC2 = vec4(8.0, 8.0, 8.0, 1.0);
++  oC3 = vec4(8.0, 8.0, 8.0, 1.0);
++}
++)";
++
+ constexpr std::string_view kPlaceholderPixelShaderSource = R"(#version 460
+ layout(location = 0) out vec4 oC0;
+ void main() {
+@@ -358,6 +382,24 @@ bool VulkanPipelineCache::Initialize() {
+         "async placeholder hot-swap will be unavailable");
+   }
+ 
++  if (REXCVAR_GET(fh1_debug_wireframe)) {
++    if (edram_fragment_shader_interlock || !vulkan_device->properties().fillModeNonSolid) {
++      REXGPU_ERROR("FH1 wireframe requires host render targets and non-solid fill support");
++      return false;
++    }
++    std::vector<uint32_t> code;
++    std::string error;
++    if (!command_processor_.CompileGlslToSpirv(VK_SHADER_STAGE_FRAGMENT_BIT,
++                                              kWireframePixelShaderSource, code, error)) {
++      REXGPU_ERROR("FH1 wireframe shader failed: {}", error);
++      return false;
++    }
++    wireframe_pixel_shader_ = ui::vulkan::util::CreateShaderModule(
++        vulkan_device, code.data(), code.size() * sizeof(uint32_t));
++    if (wireframe_pixel_shader_ == VK_NULL_HANDLE) return false;
++    REXGPU_INFO("FH1 mesh wireframe diagnostic enabled; UI shaders retain normal rendering");
++  }
++
+   uint32_t logical_processor_count = rex::thread::logical_processor_count();
+   if (!logical_processor_count) {
+     logical_processor_count = 6;
+@@ -391,6 +433,12 @@ bool VulkanPipelineCache::Initialize() {
+ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_root,
+                                                   uint32_t title_id, bool blocking) {
+   ShutdownShaderStorage();
++  // Debug fragment substitutions are not represented by the stored guest
++  // pipeline descriptions. Keep them out of the normal persistent cache.
++  if (REXCVAR_GET(fh1_debug_wireframe)) {
++    REXGPU_INFO("FH1 wireframe diagnostic disables persistent shader storage");
++    return;
++  }
+   {
+     std::lock_guard<std::mutex> lock(creation_request_lock_);
+     startup_loading_ = false;
+@@ -843,6 +891,8 @@ void VulkanPipelineCache::Shutdown() {
+                                          depth_float24_round_fragment_shader_);
+   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyShaderModule, device,
+                                          placeholder_pixel_shader_);
++  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyShaderModule, device,
++                                         wireframe_pixel_shader_);
+   if (tessellation_indexed_vertex_shader_ != VK_NULL_HANDLE) {
+     dfn.vkDestroyShaderModule(device, tessellation_indexed_vertex_shader_, nullptr);
+     tessellation_indexed_vertex_shader_ = VK_NULL_HANDLE;
+@@ -1521,6 +1571,10 @@ bool VulkanPipelineCache::GetCurrentStateDescription(
+       device_properties.fillModeNonSolid) {
+     description_out.polygon_mode = PipelinePolygonMode::kLine;
+   }
++  if (REXCVAR_GET(fh1_debug_wireframe) && primitive_polygonal && pixel_shader &&
++      normalized_color_mask && IsFh1MeshShader(vertex_shader->shader())) {
++    description_out.polygon_mode = PipelinePolygonMode::kLine;
++  }
+ 
+   if (render_target_cache_.GetPath() == RenderTargetCache::Path::kHostRenderTargets) {
+     if (render_pass_key.depth_and_color_used & 1) {
+@@ -3116,6 +3170,10 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+     shader_stage_geometry.pName = "main";
+     shader_stage_geometry.pSpecializationInfo = nullptr;
+   }
++  const bool wireframe_mesh = wireframe_pixel_shader_ != VK_NULL_HANDLE &&
++      creation_arguments.pixel_shader &&
++      description.polygon_mode == PipelinePolygonMode::kLine &&
++      IsFh1MeshShader(creation_arguments.vertex_shader->shader());
+   // Fragment shader.
+   VkPipelineShaderStageCreateInfo& shader_stage_fragment = shader_stages[shader_stage_count++];
+   shader_stage_fragment.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+@@ -3127,6 +3185,8 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+   shader_stage_fragment.pSpecializationInfo = nullptr;
+   if (fragment_shader_override != VK_NULL_HANDLE) {
+     shader_stage_fragment.module = fragment_shader_override;
++  } else if (wireframe_mesh) {
++    shader_stage_fragment.module = wireframe_pixel_shader_;
+   } else if (creation_arguments.pixel_shader) {
+     assert_true(creation_arguments.pixel_shader->is_translated());
+     if (!creation_arguments.pixel_shader->is_valid()) {
+@@ -3249,6 +3309,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+   if (description.cull_back) {
+     rasterization_state.cullMode |= VK_CULL_MODE_BACK_BIT;
+   }
++  if (wireframe_mesh) rasterization_state.cullMode = VK_CULL_MODE_NONE;
+   rasterization_state.frontFace =
+       description.front_face_clockwise ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+   // Depth bias is dynamic (even toggling - pipeline creation is expensive).
+@@ -3329,6 +3390,14 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+     }
+   }
+ 
++  // Diagnostic color draws must survive depth-prepass equality and stencil
++  // rejection. Do not change depth-only mesh draws or UI pipelines.
++  if (wireframe_mesh) {
++    depth_stencil_state.depthTestEnable = VK_FALSE;
++    depth_stencil_state.depthWriteEnable = VK_FALSE;
++    depth_stencil_state.stencilTestEnable = VK_FALSE;
++  }
++
+   VkPipelineColorBlendStateCreateInfo color_blend_state = {};
+   color_blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+   VkPipelineColorBlendAttachmentState color_blend_attachments[xenos::kMaxColorRenderTargets] = {};
+@@ -3387,6 +3456,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+               kBlendFactorMap[uint32_t(color_rt.dst_alpha_blend_factor)];
+           color_blend_attachment.alphaBlendOp = kBlendOpMap[uint32_t(color_rt.alpha_blend_op)];
+         }
++        if (wireframe_mesh) color_blend_attachment.blendEnable = VK_FALSE;
+         color_blend_attachment.colorWriteMask = VkColorComponentFlags(color_rt.color_write_mask);
+       }
+     }
+diff --git a/src/graphics/vulkan/shader.cpp b/src/graphics/vulkan/shader.cpp
+index c2805b2..3006356 100644
+--- a/src/graphics/vulkan/shader.cpp
++++ b/src/graphics/vulkan/shader.cpp
+@@ -12,6 +12,7 @@
+ #include <cstdint>
+ 
+ #include <rex/assert.h>
++#include <rex/graphics/flags.h>
+ #include <rex/graphics/vulkan/shader.h>
+ #include <rex/logging.h>
+ #include <rex/ui/vulkan/provider.h>
+@@ -34,6 +35,9 @@ VkShaderModule VulkanShader::VulkanTranslation::GetOrCreateShaderModule() {
+   if (shader_module_ != VK_NULL_HANDLE) {
+     return shader_module_;
+   }
++  if (!REXCVAR_GET(dump_shaders).empty()) {
++    Dump(REXCVAR_GET(dump_shaders), "spv");
++  }
+   const ui::vulkan::VulkanDevice* const vulkan_device =
+       static_cast<const VulkanShader&>(shader()).vulkan_device_;
+   VkShaderModuleCreateInfo shader_module_create_info;

@@ -41,6 +41,8 @@
 *.pdb
 *.metallib
 *.spv
+*.spv.*
+*.ucode.*
 
 # Generated C++ and headers may be published under the project's source policy.
 # Keep analysis metadata, stamps, dumps, and other generated artifacts local.

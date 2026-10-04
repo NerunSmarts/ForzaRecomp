@@ -23,7 +23,8 @@ class IgnoreTests(unittest.TestCase):
                        "generated/speech/image.bin", "out/images/default.bin",
                        "out/user/profile", ".tools/rexglue-patched/bin/rexglue",
                        "third_party/rexglue-sdk/README.md", ".env", "local.p12",
-                       "elsewhere/recompiled.dylib", "elsewhere/shader.spv"]
+                       "elsewhere/recompiled.dylib", "elsewhere/shader.spv",
+                       "elsewhere/shader_F00.spv.bin.vert", "elsewhere/shader_F00.ucode.vert"]
             public = [".gitignore", "CMakeLists.txt", "CMakePresets.json", "fh1_manifest.toml",
                       "generated/rexglue.cmake", "generated/default/fh1_recomp.0.cpp",
                       "generated/media/fh1_init.cpp", "generated/speech/fh1_funcs.h",
@@ -63,6 +64,17 @@ class IgnoreTests(unittest.TestCase):
             subprocess.run(["git", "add", "-f", "FH1/default.xex"], cwd=root, check=True)
             with patch.object(audit_public_tree, "ROOT", root):
                 with self.assertRaisesRegex(SystemExit, "FH1/default.xex"):
+                    audit_public_tree.audit()
+
+    def test_audit_rejects_shader_dump_with_compound_extension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            name = "shader_F00.spv.bin.vert"
+            (root / name).write_bytes(b"synthetic shader dump")
+            subprocess.run(["git", "add", name], cwd=root, check=True)
+            with patch.object(audit_public_tree, "ROOT", root):
+                with self.assertRaisesRegex(SystemExit, "shader_F00"):
                     audit_public_tree.audit()
 
 

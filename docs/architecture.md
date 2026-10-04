@@ -133,6 +133,12 @@ identified during review of
 and checked against the pinned SDK. Other reported fixes are not assumed to
 apply to this SDK revision or ARM64 target.
 
+`patches/0012-add-opt-in-vulkan-world-diagnostics.patch` adds mesh-only untextured
+wireframe rendering, sampled draw tracing, and translated shader dumps. These
+controls are off by default and do not fix the missing world. The diagnostic
+state, limitations, and renderer rewrite options are described in
+[rendering.md](rendering.md).
+
 The project's publication policy permits generated C++ and headers alongside
 configuration, tooling, runtime patches, and documentation. These files are
 translations of the game's instructions, rather than recovered developer

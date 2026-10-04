@@ -2,6 +2,8 @@ Validated on Apple Silicon macOS on 2026-10-03 with ReXGlue 0.10.0 at
 `c94f5ebdcb3c9d1a460ca48e04f9758448f8d518` and eleven local SDK patches.
 This is a working native boot and presentation bring-up. Full gameplay and an
 iOS build remain unverified.
+An additional opt-in graphics diagnostic patch was added on 2026-10-04;
+its trials and limitations are recorded in [rendering.md](rendering.md).
 
 | Check | Result |
 | --- | --- |
@@ -22,7 +24,7 @@ iOS build remain unverified.
 | VMX arithmetic helpers | Fusion, signed zero, lane order, overflow, non-finite inputs and denormals pass |
 | ARM integer vector helpers | Full shift-count ranges, byte value/count pairs, permutation controls and mixed random lanes pass scalar references |
 | ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
-| Public-tree and malformed-XEX checks | Six tests pass; publication audit passes |
+| Public-tree and malformed-XEX checks | Seven tests pass; publication audit passes |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
