@@ -60,14 +60,14 @@ primitive-restart warnings; a surviving process does not establish correct
 gameplay. The iOS design is documented in [ios-port.md](ios-port.md), without
 claiming a functioning device build.
 
-The project root is a Git repository on `main`, with
+The project root is a Git repository on `master`, with
 `https://github.com/NerunSmarts/ForzaRecomp.git` configured as `origin`.
 The existing Windows repository was reviewed in an isolated, ignored clone.
 Its logo is preserved byte-for-byte at `ForzaRecompResources/logo.png` and
 appears in the README. Its previous tree includes generated game code and
 native libraries, so that tree and history have not been imported into this
-project's public `main` branch. The original `master` history is preserved
-separately.
+project's public history. The original Windows repository is retained in the
+ignored local review clone; this project uses a single public `master` branch.
 
 Game files, generated code,
 decrypted images, binaries, captures, logs, saves, SDK downloads, and local
