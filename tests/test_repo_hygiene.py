@@ -19,18 +19,38 @@ class IgnoreTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             private = ["FH1/default.xex", "FH1/media/UI.zip", "FH1/media/cars/car.zip",
                        "assets/game.dat", "elsewhere/DEFAULT.XEX", "elsewhere/update.xexp",
-                       "generated/default/fh1_recomp.0.cpp", "generated/media/fh1_init.cpp",
-                       "generated/speech/fh1_funcs.h", "out/images/default.bin",
+                       "generated/default/fh1.analysis.json", "generated/media/codegen.stamp",
+                       "generated/speech/image.bin", "out/images/default.bin",
                        "out/user/profile", ".tools/rexglue-patched/bin/rexglue",
                        "third_party/rexglue-sdk/README.md", ".env", "local.p12",
                        "elsewhere/recompiled.dylib", "elsewhere/shader.spv"]
             public = [".gitignore", "CMakeLists.txt", "CMakePresets.json", "fh1_manifest.toml",
-                      "generated/rexglue.cmake", "src/main.cpp", "config/disc.json",
+                      "generated/rexglue.cmake", "generated/default/fh1_recomp.0.cpp",
+                      "generated/media/fh1_init.cpp", "generated/speech/fh1_funcs.h",
+                      "src/main.cpp", "config/disc.json",
                       "patches/0001-preserve-xex-heap-allocations.patch", "README.md"]
             for path in private + public:
                 result = subprocess.run(["git", "check-ignore", "--no-index", "-q", path],
                                         cwd=root)
                 self.assertEqual(result.returncode == 0, path in private, path)
+
+    def test_audit_allows_generated_sources_but_rejects_generated_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copy2(ROOT / ".gitignore", root / ".gitignore")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            generated = root / "generated" / "default"
+            generated.mkdir(parents=True)
+            (generated / "fh1_recomp.0.cpp").write_text("// Synthetic translated source\n")
+            (generated / "fh1_funcs.h").write_text("// Synthetic declarations\n")
+            with patch.object(audit_public_tree, "ROOT", root):
+                audit_public_tree.audit()
+            (generated / "fh1.analysis.json").write_text("{}")
+            subprocess.run(["git", "add", "-f", "generated/default/fh1.analysis.json"],
+                           cwd=root, check=True)
+            with patch.object(audit_public_tree, "ROOT", root):
+                with self.assertRaisesRegex(SystemExit, "fh1.analysis.json"):
+                    audit_public_tree.audit()
 
     def test_audit_rejects_private_files_even_when_force_tracked(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -16,8 +16,10 @@ to native C++; it does not recover the original developer source code.
 Place your extracted disc files in `FH1/`, keeping the disc directory structure.
 Only the disc revision identified in `config/disc.json` is currently supported.
 The build verifies all three XEX hashes before applying address-specific
-configuration. No game files or translated game sources are included in the
-public project.
+configuration. Generated C++ and headers may be checked into this repository;
+they translate game instructions and do not contain the original developer
+source. The original XEXs and disc assets are still required to build and run.
+Game executable images, assets, and compiled game binaries are excluded.
 
 With Xcode, CMake, Ninja, Git, and Python 3 installed:
 
@@ -92,7 +94,7 @@ shifts. Videos still use the translated WMV software decoder. The user reports
 slower onset of thermal throttling after the first two fixes; sustained thermal
 behavior remains under investigation.
 
-`.gitignore` excludes the disc tree, translated game code, decrypted images,
+`.gitignore` permits generated C++ and headers and excludes the disc tree, decrypted images,
 native binaries, SDK downloads, logs, saves, and credentials. The publication
 audit also catches ignored private files that were previously tracked. Run it
 before committing or publishing. A compiled game binary contains translated

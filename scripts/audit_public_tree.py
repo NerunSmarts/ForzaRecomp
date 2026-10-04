@@ -22,7 +22,9 @@ def audit(environment=None):
     for name in sorted(names):
         path = PurePosixPath(name)
         private = path.parts[0].lower() in PRIVATE_ROOTS or path.suffix.lower() in PRIVATE_SUFFIXES
-        private |= path.parts[0] == "generated" and name != "generated/rexglue.cmake"
+        private |= (path.parts[0] == "generated"
+                    and name != "generated/rexglue.cmake"
+                    and path.suffix.lower() not in {".cpp", ".h"})
         private |= path.name.startswith(".env") and path.name != ".env.example"
         if private:
             bad.append(name)

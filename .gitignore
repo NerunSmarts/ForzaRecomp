@@ -42,8 +42,12 @@
 *.metallib
 *.spv
 
-# Generated game code contains translated copyrighted game instructions.
-/generated/*
+# Generated C++ and headers may be published under the project's source policy.
+# Keep analysis metadata, stamps, dumps, and other generated artifacts local.
+/generated/**
+!/generated/**/
+!/generated/**/*.cpp
+!/generated/**/*.h
 !/generated/rexglue.cmake
 
 # Downloaded dependencies, SDKs, builds, analysis images, logs, saves, and caches.

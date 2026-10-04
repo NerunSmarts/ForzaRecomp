@@ -133,7 +133,10 @@ identified during review of
 and checked against the pinned SDK. Other reported fixes are not assumed to
 apply to this SDK revision or ARM64 target.
 
-Generated sources, decrypted images, logs, saves, and SDK downloads are private
-local build artifacts. The public project contains configuration, tooling,
-runtime patches, and documentation. A native compiled game binary also embeds
-translated game code and must be treated as a private artifact.
+The project's publication policy permits generated C++ and headers alongside
+configuration, tooling, runtime patches, and documentation. These files are
+translations of the game's instructions, rather than recovered developer
+source. The SDK's license does not grant rights to the original game code.
+Decrypted images, analysis metadata, logs, saves, SDK downloads, original XEXs,
+disc assets, and compiled game binaries remain private local artifacts. The
+user must still supply the verified disc files to build and run.

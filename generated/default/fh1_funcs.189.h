@@ -1,0 +1,14 @@
+#pragma once
+
+#include "fh1_pch.h"
+
+DECLARE_REX_FUNC(__restfpr_14);
+DECLARE_REX_FUNC(__restgprlr_25);
+DECLARE_REX_FUNC(__restgprlr_29);
+DECLARE_REX_FUNC(__savefpr_14);
+DECLARE_REX_FUNC(__savegprlr_25);
+DECLARE_REX_FUNC(__savegprlr_29);
+DECLARE_REX_FUNC(sub_823F2ED8);
+DECLARE_REX_FUNC(sub_8241A2E0);
+DECLARE_REX_FUNC(sub_824AFB20);
+DECLARE_REX_FUNC(sub_82CBF880);

@@ -22,7 +22,7 @@ iOS build remain unverified.
 | VMX arithmetic helpers | Fusion, signed zero, lane order, overflow, non-finite inputs and denormals pass |
 | ARM integer vector helpers | Full shift-count ranges, byte value/count pairs, permutation controls and mixed random lanes pass scalar references |
 | ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
-| Public-tree and malformed-XEX checks | Five tests pass; publication audit passes |
+| Public-tree and malformed-XEX checks | Six tests pass; publication audit passes |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
@@ -69,7 +69,8 @@ native libraries, so that tree and history have not been imported into this
 project's public history. The original Windows repository is retained in the
 ignored local review clone; this project uses a single public `master` branch.
 
-Game files, generated code,
-decrypted images, binaries, captures, logs, saves, SDK downloads, and local
-credentials are ignored. There is no published build. Run the public
+Generated C++ and headers are eligible for publication under the project's
+source policy. Game files, analysis metadata, decrypted images, binaries,
+captures, logs, saves, SDK downloads, and local credentials are ignored.
+There is no published build. Run the public
 tree audit before any commit or publication.
