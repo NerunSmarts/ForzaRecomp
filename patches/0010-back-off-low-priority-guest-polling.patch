@@ -1,0 +1,33 @@
+diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
+index b2d70f5..6f36162 100644
+--- a/src/codegen/builders/system.cpp
++++ b/src/codegen/builders/system.cpp
+@@ -55,8 +55,10 @@ bool build_db16cyc(BuilderContext& ctx) {
+ }
+ 
+ bool build_cctpl(BuilderContext& ctx) {
+-  // Xenon-specific cache control thread priority low, no effect in recompiled code
+-  (void)ctx;
++  // Xenon's low-priority hint is used in worker polling loops. Unmetered
++  // native execution otherwise turns these into a full-core busy wait.
++  // Briefly give the producer time to run without changing guest registers.
++  ctx.println("\trex::thread::Sleep(std::chrono::microseconds(50));");
+   return true;
+ }
+ 
+diff --git a/src/codegen/codegen_writer.cpp b/src/codegen/codegen_writer.cpp
+index a0484fb..3b2669c 100644
+--- a/src/codegen/codegen_writer.cpp
++++ b/src/codegen/codegen_writer.cpp
+@@ -295,6 +295,11 @@ bool CodegenWriter::write(bool force) {
+     SaveCurrentOutData(fmt::format("{}_funcs.{}.h", projectName, index));
+ 
+     println("#include \"{}_funcs.{}.h\"\n", projectName, index);
++    if (std::any_of(buckets[index].begin(), buckets[index].end(), [&](size_t entry) {
++          return bodies[entry].find("rex::thread::Sleep(") != std::string::npos;
++        })) {
++      println("#include <rex/thread.h>\n");
++    }
+     for (size_t entry : buckets[index]) {
+       out += bodies[entry];
+     }

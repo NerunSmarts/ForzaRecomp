@@ -23,14 +23,23 @@ class FrameCapture {
       return;
     const std::string path(requested);
     const bool sequence = std::getenv("FH1_CAPTURE_SEQUENCE") != nullptr;
+    int interval_ms = 2000;
+    if (const char* interval = std::getenv("FH1_CAPTURE_INTERVAL_MS"))
+      interval_ms = std::clamp(std::atoi(interval), 100, 60000);
+    int delay_ms = 0;
+    if (const char* delay = std::getenv("FH1_CAPTURE_DELAY_MS"))
+      delay_ms = std::clamp(std::atoi(delay), 0, 600000);
     int attempts = 30;
     if (const char* count = std::getenv("FH1_CAPTURE_ATTEMPTS"))
       attempts = std::clamp(std::atoi(count), 1, 300);
-    worker_ = std::jthread([runtime, path, sequence, attempts](std::stop_token stop) {
-      using namespace std::chrono_literals;
+    worker_ = std::jthread([runtime, path, sequence, attempts, interval_ms, delay_ms](std::stop_token stop) {
+      auto wait = [&](int milliseconds) {
+        for (int elapsed = 0; elapsed < milliseconds && !stop.stop_requested(); elapsed += 100)
+          std::this_thread::sleep_for(std::chrono::milliseconds(std::min(100, milliseconds - elapsed)));
+      };
+      wait(delay_ms);
       for (int attempt = 0; attempt < attempts; ++attempt) {
-        for (int tick = 0; tick < 20 && !stop.stop_requested(); ++tick)
-          std::this_thread::sleep_for(100ms);
+        wait(interval_ms);
         if (stop.stop_requested())
           return;
         auto* graphics = runtime->graphics_system();

@@ -93,6 +93,22 @@ with the same tool retain the normal cache. If hashing fails, codegen bypasses
 the stamp instead of accepting stale output. The project's declared SDK
 version remains unchanged.
 
+`patches/0009-reuse-presenter-pipelines.patch` records the swapchain format
+when creating a presenter pipeline. The missing assignment made every later
+paint treat the cached pipeline as incompatible, wait for its previous use,
+destroy it, and compile it again. Pipelines now remain cached until the actual
+swapchain format changes. Stack samples after the fix no longer show repeated
+presenter pipeline creation during playback.
+
+`patches/0010-back-off-low-priority-guest-polling.patch` implements the Xenon
+`cctpl` low-priority hint with a 50-microsecond host sleep. FH1 uses it before
+a delay-and-poll sequence in its worker scheduler. The previous no-op
+translation removed the delay and consumed a core polling for work. The new
+backoff leaves guest registers and the surrounding scheduling logic intact.
+Only generated files using this helper include the host threading header.
+This changes host scheduling latency and needs extended gameplay validation.
+It does not replace the media facade's WMV software decoder.
+
 The FH1 host also enables the existing `gpu_allow_invalid_fetch_constants`
 compatibility option after the GPU plugin registers its flags. Explicit user
 settings override this default. The graphics issues and this option were

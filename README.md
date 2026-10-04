@@ -81,6 +81,15 @@ stick X (−32768–32767). For example, `38 0.5 0010 0 0` presses Start at 38 s
 This opt-in driver feeds only guest controller 0. It sends no host keystrokes.
 Diagnostic intervals can be 1–600 seconds and end by intentionally stopping
 the game.
+For custom capture runs, `FH1_CAPTURE_DELAY_MS` delays the first capture and
+`FH1_CAPTURE_INTERVAL_MS` changes its interval (default 2000 ms). Delaying
+captures keeps GPU readback out of a CPU profile; normal launches create no
+capture worker unless `FH1_CAPTURE_FRAME` is set.
+
+The patched runtime reuses presenter pipelines and backs off the guest's
+low-priority scheduler polling. These reduce unnecessary menu work. Videos
+still use the translated WMV software decoder; sustained thermal behavior
+remains under investigation.
 
 `.gitignore` excludes the disc tree, translated game code, decrypted images,
 native binaries, SDK downloads, logs, saves, and credentials. The publication
