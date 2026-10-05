@@ -4,7 +4,8 @@ The chosen direction is a title-specific Vulkan renderer, using MoltenVK on
 macOS and eventually iOS, and native Vulkan on Windows and Linux. The existing
 Xenos renderer remains the working fallback. This document describes the
 architecture and the implemented import, translation-probe and discovery
-stage. The host shader adapter compiles a tested subset to SPIR-V. Native FH1
+stage. All imported programs now compile and validate as SPIR-V; original
+synthetic programs also pass offscreen execution checks. Native FH1
 drawing, a complete runtime shader cache, renderer switching and a performance
 gain are not yet implemented or demonstrated.
 
@@ -139,12 +140,33 @@ a following mini fetch. Existing runtime dumps corroborate VF89/VF90 use in
 40 correlated vertex-program candidates. The dumps do not contain the buffer
 contents needed for an original-material native draw proof.
 
-Expanding the mixed sample to 72 yields 70 compilation/validation passes.
-Both remaining failures are pixel shaders referencing `b133`: their boolean
-control-flow addresses still need reconciliation with the reflected register
-bank. This sweep does not cover all 1,407 unique pixel programs. Successful
-compilation does not establish complete control-flow, texture or material
-parity, and cannot by itself authorize bypassing a guest pass.
+The expanded mixed sample initially passed 70/72; both failures referenced
+pixel boolean `b133`. The adapter now reads the complete 256-bit hardware
+boolean bank. Pixel reflection indices 0–127 alias hardware indices 128–255,
+while control-flow addresses already specify the hardware index. A compact
+16+16-bit mapping cannot represent these shaders correctly.
+
+The full pixel sweep then exposed 18 failures in co-issued relative array
+reads and absolute literals. Relative flags belong to the first and subsequent
+constant operands; they must not apply to every constant in an ALU instruction.
+The adapter now selects the appropriate flag per operand, including scalar
+constant/register operations. Physical array loads are clamped before selection
+so negative or excessive indices cannot access unrelated host memory. Zero for
+these invalid addresses is a safety result, not established hardware parity.
+
+The adapter also now preserves boolean and predicate execution-clause guards,
+which were previously dropped. Conditional-end clauses terminate only when
+their guard matches, and a clause predicate is evaluated before instructions
+inside that clause can change it. Predicate-clean is a scheduling hint and
+does not clear the predicate. The imported inventory contains conditional
+clauses in 455 vertex and 608 pixel programs; these are separate counts from
+the 455 vertex programs with extra buffer reads.
+
+With all four ordered patches, **all 1,511 vertex and 1,407 pixel programs**
+translate, compile and pass Vulkan SPIR-V validation. This covers the imported
+inventory, not every runtime-patched variant. Successful compilation does not
+establish texture, complete instruction or material parity, and cannot by
+itself authorize bypassing a guest pass.
 
 The prototype shader contract assigns inputs as follows:
 
@@ -160,12 +182,14 @@ The prototype shader contract assigns inputs as follows:
 
 The shared constant buffer has 32 slots per descriptor table: pixel slots
 0–15 and vertex slots 16–31. Three texture-index tables occupy bytes 0–383,
-sampler indices 384–511, and sampler LOD biases 512–639. Boolean bits start at
-640, UV swaps at 644, half-pixel offset at 648 and alpha threshold at 656.
+sampler indices 384–511, and sampler LOD biases 512–639. Byte 640 retains the
+legacy compact boolean field, which FH1 control flow no longer uses. UV swaps
+start at 644, half-pixel offset at 648 and alpha threshold at 656.
 Vertex-index min/max occupy 660/664; byte 668 is reserved. The 96 vertex-buffer
 bindings start at byte 672, with a 16-byte record containing a 64-bit host
-device address, DWORD count and endian mode. The shared block totals 2,208
-bytes. `src/graphics/shader_contract.h` asserts that layout and provides
+device address, DWORD count and endian mode. Eight host-endian hardware boolean
+words start at byte 2,208, copied from GPU registers `0x4900`–`0x4907`. The
+shared block totals 2,240 bytes. `src/graphics/shader_contract.h` asserts that layout and provides
 binding preflight: fetch type, owned allocation extent, generation presence,
 alignment, interior-address rebasing and overflow checks. The uploader must
 resolve the current generation and retain its allocation through the GPU fence;
@@ -210,6 +234,33 @@ python3 tools/probe_fh1_shader_translation.py \
   out/native-renderer/shaders/manifest.json \
   --tools .tools/fh1-shaders/tools.json --all-vertex \
   --output out/native-renderer/all-vertex
+```
+
+`tools/validate_shader_control_flow.py` builds 412 original microcode fixtures
+and invokes the actual translator. Their emitted vertex/pixel functions are
+called from synthetic compute shaders and checked against independently stated
+branch results and distinct constant banks. Two complementary boolean patterns
+exercise every bit both set and clear, including differences between hardware
+`b133`, vertex `b5` and the obsolete compact `b21`. The 1,336 cases pass on
+Apple M2 through MoltenVK. Coverage includes forward jumps, switch-based
+control flow, boolean/predicate clauses, conditional ends, changing predicates,
+`a0`/`aL` addressing, absolute literals and constant-bank safety boundaries.
+Deliberately removing a clause guard or selecting the wrong relative index
+still compiles but produces mismatches, which the harness detects.
+
+The wrapper forces specialization flags to zero because optional alpha-test
+`clip` requires fragment execution. These tests do not validate discard,
+rasterization, texture sampling, loops or shader calls. The offscreen harness
+is shared with buffer-fetch validation and owns its constant/input buffers
+until submission completes. Full material comparison remains necessary.
+
+```sh
+python3 tools/validate_shader_control_flow.py \
+  --output out/native-renderer/control-flow-gpu
+python3 tools/probe_fh1_shader_translation.py \
+  out/native-renderer/shaders/manifest.json \
+  --tools .tools/fh1-shaders/tools.json --all-pixel \
+  --output out/native-renderer/all-pixel
 ```
 
 All validation outputs remain ignored. Output directories must be new and
@@ -290,6 +341,54 @@ thread ownership and lifetime before replacing any operation. Generated direct
 calls need strong symbol overrides of the generated weak functions; changing
 only the indirect dispatch table will miss them. An observer hook must call
 the original `__imp__sub_*` implementation and preserve guest behavior.
+
+## Prepared draw input capture
+
+SDK patch 17 adds `vulkan_debug_capture_draw_inputs` (empty by default) and
+`vulkan_debug_capture_draw_frame` (minimum frame). The implementation builds
+but has **not been exercised in FH1**. Coordinate a short 3D input recording
+with the user before enabling it; it synchronizes the queue and cannot be
+used to measure normal frame times.
+
+Set a non-empty output path before launch, then create its companion
+`OUTPUT-PATH.trigger` marker only after the user confirms the loaded 3D scene.
+The command processor checks that marker once per frame while capture is
+pending, then selects one color-writing mesh draw using VF89 or VF90,
+with a standard vertex stage, no memory exports in that draw, and at least
+three vertices. Tessellation, point/rectangle expansion and converted primitive
+paths are excluded. Original DMA
+indices must use the guest-DMA path; converted/builtin primitive buffers are
+excluded from this first proof. It copies all used vertex ranges and original
+indices from GPU shared memory after that draw, preserving preceding GPU
+memory exports rather than assuming the CPU copy is current. It records all
+`0x5003` GPU register words and the two active shader programs. Index readback
+padding is recorded separately from the exact address and byte count.
+
+The snapshot is limited to 32 MiB, attempted once per command-processor
+instance, and requires a new directory beneath the process working directory's
+ignored `out/`. Invalid ranges, queue/map failures, and existing/outside paths
+abort the diagnostic. The completion manifest is written after payloads; a
+missing manifest denotes an incomplete capture. Texture fetch registers are
+present, but texture images and framebuffer attachments are not copied.
+The game continues through the existing renderer.
+
+After a coordinated recording, validate the resulting snapshot without running
+the game again:
+
+```sh
+python3 tools/inspect_draw_inputs.py out/native-renderer/DRAW-CAPTURE \
+  --output out/native-renderer/draw-input-validation
+```
+
+The inspector verifies shader XXH3 hashes against endian-converted microcode,
+register-file size, complete packed readback ranges, fetch addresses/extents,
+and original index boundaries. It extracts separate 256-float4 vertex/pixel
+constant banks and all eight boolean words, retaining base vertex and draw
+index bounds. It preserves invalid-fetch compatibility type 1 for explicit
+later handling; native binding preflight currently requires type 3. This is
+input validation, not residency, complete resource coverage or a native draw.
+Shader variant selection, declaration conversion, texture/image capture and
+native submission/presentation remain the next steps.
 
 ## Runtime architecture to implement
 

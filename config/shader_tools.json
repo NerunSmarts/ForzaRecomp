@@ -3,6 +3,8 @@
   "revision": "990d03b28a27b50277ee5d8d942e1c5f873869d1",
   "patches": [
     "patches/xenosrecomp/0001-fh1-shader-contract.patch",
-    "patches/xenosrecomp/0002-fh1-buffer-fetch.patch"
+    "patches/xenosrecomp/0002-fh1-buffer-fetch.patch",
+    "patches/xenosrecomp/0003-fh1-boolean-control-flow.patch",
+    "patches/xenosrecomp/0004-fh1-constant-operand-addressing.patch"
   ]
 }

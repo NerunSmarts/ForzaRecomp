@@ -1,0 +1,78 @@
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -508,6 +508,24 @@
+             bool select = true;
+             bool negate = false;
+             bool abs = false;
++#ifdef FH1_RECOMP
++            // CF-relative flags belong to the first and subsequent constant
++            // operands, not to the whole ALU instruction. A literal can be
++            // co-issued with an addressed array read and must stay absolute.
++            bool constantRelative = false;
++            switch (operand)
++            {
++            case VECTOR_0:
++                constantRelative = instr.const0Relative;
++                break;
++            case VECTOR_1:
++                constantRelative = instr.src1Select ? instr.const0Relative : instr.const1Relative;
++                break;
++            default:
++                constantRelative = instr.src1Select && instr.src2Select ? instr.const0Relative : instr.const1Relative;
++                break;
++            }
++#endif
+ 
+             switch (operand)
+             {
+@@ -589,18 +607,32 @@
+                     #endif
+                         {
+                             regFormatted = fmt::format("{}({}{})", constantName,
+-                                reg - findResult->second->registerIndex, instr.const0Relative ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
++                                reg - findResult->second->registerIndex,
++#ifdef FH1_RECOMP
++                                constantRelative
++#else
++                                instr.const0Relative
++#endif
++                                ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
+                         }
+                     }
+                     else
+                     {
++#ifdef FH1_RECOMP
++                        assert(!constantRelative);
++#else
+                         assert(!instr.const0Relative && !instr.const1Relative);
++#endif
+                         regFormatted = constantName;
+                     }
+                 }
+                 else
+                 {
++#ifdef FH1_RECOMP
++                    assert(!constantRelative);
++#else
+                     assert(!instr.const0Relative && !instr.const1Relative);
++#endif
+                     regFormatted = fmt::format("c{}", reg);
+                 }
+             }
+@@ -1275,8 +1307,16 @@
+             {
+                 uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
+ 
++#ifdef FH1_RECOMP
++                // select may evaluate both operands. Clamp the physical load
++                // independently, and use unsigned comparison to reject negative
++                // indices. Zero outside this bank is a memory-safety result.
++                println("#define {}(INDEX) select(uint(INDEX) < {}, vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + ({} + clamp(int(INDEX), 0, {})) * 16, 0x10), 0.0)",
++                    constantName, tailCount, shaderName, constantInfo->registerIndex.get(), tailCount - 1);
++#else
+                 println("#define {}(INDEX) select((INDEX) < {}, vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + ({} + min(INDEX, {})) * 16, 0x10), 0.0)",
+                     constantName, tailCount, shaderName, constantInfo->registerIndex.get(), tailCount - 1);
++#endif
+             }
+             else
+             {

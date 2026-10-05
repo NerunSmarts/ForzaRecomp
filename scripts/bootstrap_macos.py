@@ -8,6 +8,8 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.dependency_patches import apply_patch_series
 REVISION = "c94f5ebdcb3c9d1a460ca48e04f9758448f8d518"
 ZIP_SHA256 = "1192638b51a6963aa6a4f24b77ebcb90c16f7fd0b91b311e11a90100f5274326"
 
@@ -54,12 +56,7 @@ def main():
         raise RuntimeError(f"SDK source must be at {REVISION}; found {current}")
     run("/usr/bin/git", "submodule", "update", "--init", "--recursive", "--depth", "1",
         "--jobs", "4", cwd=source)
-    for patch in sorted((ROOT / "patches").glob("*.patch")):
-        reverse = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
-                                 cwd=source, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if reverse.returncode:
-            run("git", "apply", "--check", str(patch), cwd=source)
-            run("git", "apply", str(patch), cwd=source)
+    apply_patch_series(source, sorted((ROOT / "patches").glob("*.patch")))
     build = ROOT / "out/build/sdk"
     run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
         "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=/usr/bin/clang",

@@ -26,7 +26,7 @@ struct alignas(16) SharedConstants {
   std::array<uint32_t, 32> texture_cube;
   std::array<uint32_t, 32> sampler;
   std::array<float, 32> sampler_lod_bias;
-  uint32_t booleans;
+  uint32_t legacy_booleans; // Reserved compact bank; FH1 uses boolean_words.
   uint32_t swapped_texcoords;
   std::array<float, 2> half_pixel_offset;
   float alpha_threshold;
@@ -34,6 +34,7 @@ struct alignas(16) SharedConstants {
   uint32_t vertex_index_max = 0xFFFFFF;
   uint32_t reserved;
   std::array<VertexFetchBinding, 96> vertex_fetch;
+  std::array<uint32_t, 8> boolean_words; // Host-endian words from GPU register 0x4900.
 };
 
 static_assert(sizeof(PushConstants) == 24);
@@ -41,14 +42,15 @@ static_assert(sizeof(VertexFetchBinding) == 16);
 static_assert(offsetof(VertexFetchBinding, word_count) == 8);
 static_assert(offsetof(VertexFetchBinding, endian) == 12);
 static_assert(offsetof(SharedConstants, sampler_lod_bias) == 512);
-static_assert(offsetof(SharedConstants, booleans) == 640);
+static_assert(offsetof(SharedConstants, legacy_booleans) == 640);
 static_assert(offsetof(SharedConstants, swapped_texcoords) == 644);
 static_assert(offsetof(SharedConstants, half_pixel_offset) == 648);
 static_assert(offsetof(SharedConstants, alpha_threshold) == 656);
 static_assert(offsetof(SharedConstants, vertex_index_min) == 660);
 static_assert(offsetof(SharedConstants, vertex_index_max) == 664);
 static_assert(offsetof(SharedConstants, vertex_fetch) == 672);
-static_assert(sizeof(SharedConstants) == 2208);
+static_assert(offsetof(SharedConstants, boolean_words) == 2208);
+static_assert(sizeof(SharedConstants) == 2240);
 
 // An uploader must supply the current generation of owned, GPU-resident data
 // and retain that allocation until its submission fence completes. These

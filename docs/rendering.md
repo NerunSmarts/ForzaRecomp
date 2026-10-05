@@ -130,8 +130,11 @@ The implemented first stage imports all 174 local effect files and tests an
 FH1 adaptation of XenosRecomp. Buffer fetch support now allows all 1,511
 imported vertex programs to compile and pass Vulkan SPIR-V validation. An
 offscreen MoltenVK check passes 4,013 synthetic cases across all 15 vertex
-formats and address/conversion controls. The expanded mixed shader sample
-passes 70/72, with two pixel boolean-register failures still to resolve.
+formats and address/conversion controls. All 1,407 imported pixel programs now
+compile and validate too, after full boolean-bank, conditional-clause and
+constant-address fixes. Another 1,336 original synthetic GPU cases verify
+branch/constant execution. A bounded, opt-in GPU draw-input snapshot builds
+but still needs a coordinated game recording.
 The game still uses the existing renderer. Native world passes, UI composition,
 resource lifetimes and a measured performance gain remain to be implemented.
 The architecture, commands, source references and next milestones are in

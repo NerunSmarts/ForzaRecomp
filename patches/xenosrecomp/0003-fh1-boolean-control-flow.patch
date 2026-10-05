@@ -1,0 +1,105 @@
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -56,7 +56,8 @@
+     float g_AlphaThreshold : packoffset(c41.x); \
+     uint g_Fh1VertexIndexMin : packoffset(c41.y); \
+     uint g_Fh1VertexIndexMax : packoffset(c41.z); \
+-    uint4 g_Fh1VertexFetchBindings[96] : packoffset(c42);
++    uint4 g_Fh1VertexFetchBindings[96] : packoffset(c42); \
++    uint4 g_Fh1BooleanWords[2] : packoffset(c138);
+ #define g_Fh1SamplerLodBias(SLOT) g_Fh1SamplerLodBiasValues[(SLOT) / 4][(SLOT) % 4]
+ #else
+ #define DEFINE_SHARED_CONSTANTS() \
+@@ -71,6 +72,18 @@
+ #endif
+ 
+ #ifdef FH1_RECOMP
++// Full hardware boolean bank: 256 bits, addressed by CF instructions without
++// remapping. Pixel reflection indices 0..127 alias hardware indices 128..255.
++#ifdef __spirv__
++bool fh1Boolean(uint index)
++{
++    uint word = vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 2208 + (index >> 5) * 4);
++    return (word & (1u << (index & 31))) != 0;
++}
++#else
++// Defined after the generated constant buffer.
++bool fh1Boolean(uint index);
++#endif
+ #ifdef __spirv__
+ float fh1InitialVertexIndex(uint index)
+ {
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -1379,6 +1379,7 @@
+ #ifdef FH1_RECOMP
+     out += "uint4 fh1VertexFetchBinding(uint slot) { return g_Fh1VertexFetchBindings[slot]; }\n";
+     out += "float fh1InitialVertexIndex(uint index) { return float(clamp(index & 0xFFFFFF, g_Fh1VertexIndexMin, g_Fh1VertexIndexMax)); }\n";
++    out += "bool fh1Boolean(uint index) { return (g_Fh1BooleanWords[index >> 7][(index >> 5) & 3] & (1u << (index & 31))) != 0; }\n";
+ #endif
+ 
+     out += "#endif\n";
+@@ -1391,7 +1392,12 @@
+         if (constantInfo->registerSet == RegisterSet::Bool)
+         {
+             const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
++#ifdef FH1_RECOMP
++            assert(constantInfo->registerIndex < 128);
++            println("\t#define {} fh1Boolean({})", constantName, constantInfo->registerIndex + (isPixelShader ? 128 : 0));
++#else
+             println("\t#define {} (1 << {})", constantName, constantInfo->registerIndex + (isPixelShader ? 16 : 0));
++#endif
+             boolConstants.emplace(constantInfo->registerIndex, constantName);
+         }
+     }
+@@ -1782,7 +1788,17 @@
+                 address = cfInstr.condExec.address;
+                 count = cfInstr.condExec.count;
+                 sequence = cfInstr.condExec.sequence;
++#ifdef FH1_RECOMP
++                shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecPredCleanEnd);
++                indent();
++                println("if ({}fh1Boolean({}))", cfInstr.condExec.condition ? "" : "!", uint32_t(cfInstr.condExec.boolAddress));
++                indent();
++                out += "{\n";
++                ++indentation;
++                shouldCloseCurlyBracket = true;
++#else
+                 shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecEnd || cfInstr.opcode == ControlFlowOpcode::CondExecEnd);
++#endif
+                 break;
+ 
+             case ControlFlowOpcode::CondExecPred:
+@@ -1791,6 +1807,16 @@
+                 count = cfInstr.condExecPred.count;
+                 sequence = cfInstr.condExecPred.sequence;
+                 shouldReturn = (cfInstr.opcode == ControlFlowOpcode::CondExecPredEnd);
++#ifdef FH1_RECOMP
++                // Evaluate the clause predicate once. ALU instructions may
++                // subsequently change p0 while this same clause is executing.
++                indent();
++                println("if ({}p0)", cfInstr.condExecPred.condition ? "" : "!");
++                indent();
++                out += "{\n";
++                ++indentation;
++                shouldCloseCurlyBracket = true;
++#endif
+                 break;
+ 
+             case ControlFlowOpcode::LoopStart:
+@@ -1846,11 +1872,15 @@
+                     }
+                     else
+                     {
++#ifdef FH1_RECOMP
++                        println("if ({}fh1Boolean({}))", cfInstr.condJmp.condition ^ simpleControlFlow ? "" : "!", uint32_t(cfInstr.condJmp.boolAddress));
++#else
+                         auto findResult = boolConstants.find(cfInstr.condJmp.boolAddress);
+                         if (findResult != boolConstants.end())
+                             println("if ((g_Booleans & {}) {}= 0)", findResult->second, cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
+                         else
+                             println("if (b{} {}= 0)", uint32_t(cfInstr.condJmp.boolAddress), cfInstr.condJmp.condition ^ simpleControlFlow ? "!" : "=");
++#endif
+                     }
+ 
+                     if (simpleControlFlow)

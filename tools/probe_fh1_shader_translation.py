@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.private_artifacts import ROOT, new_output_directory
 
 
-def select_programs(manifest, per_stage, all_vertex=False):
+def select_programs(manifest, per_stage, all_vertex=False, all_pixel=False):
+    if all_vertex and all_pixel:
+        raise ValueError("Select one complete shader stage at a time")
     groups = defaultdict(list)
     for effect in manifest["effects"]:
         family = effect["path"].split("/")[0]
@@ -29,9 +31,9 @@ def select_programs(manifest, per_stage, all_vertex=False):
                 groups[key].append(digest)
     selected = defaultdict(set)
     for (family, stage), programs in sorted(groups.items()):
-        if all_vertex and stage != "vertex":
+        if (all_vertex and stage != "vertex") or (all_pixel and stage != "pixel"):
             continue
-        count = len(programs) if all_vertex else min(len(programs), per_stage)
+        count = len(programs) if all_vertex or all_pixel else min(len(programs), per_stage)
         for index in range(count):
             selected[programs[index * len(programs) // count]].add(family)
     return dict(sorted(selected.items()))
@@ -59,7 +61,7 @@ def run_step(command, log, timeout, environment):
 
 
 def probe(manifest_path, translator, common, dxc, output, per_stage=2, timeout=15,
-          library_directory=None, validator=None, all_vertex=False, translate_only=False):
+          library_directory=None, validator=None, all_vertex=False, translate_only=False, all_pixel=False):
     if not 1 <= per_stage <= 16 or not 1 <= timeout <= 60:
         raise ValueError("Use 1–16 samples per family/stage and a 1–60 second per-step limit")
     manifest_path = Path(manifest_path).resolve()
@@ -75,7 +77,7 @@ def probe(manifest_path, translator, common, dxc, output, per_stage=2, timeout=1
         key = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
         environment[key] = str(Path(library_directory).resolve()) + os.pathsep + environment.get(key, "")
     inputs = []
-    selected = select_programs(manifest, per_stage, all_vertex)
+    selected = select_programs(manifest, per_stage, all_vertex, all_pixel)
     if len(selected) > 4096:
         raise ValueError("Shader probe is limited to 4,096 programs")
     for digest, families in selected.items():
@@ -126,7 +128,7 @@ def probe(manifest_path, translator, common, dxc, output, per_stage=2, timeout=1
             if step in row:
                 counts[f"{step}_{row[step]['status']}"] += 1
         results.append(row)
-        if not all_vertex or len(results) % 50 == 0 or len(results) == len(inputs) or row["translation"]["status"] != "pass":
+        if not (all_vertex or all_pixel) or len(results) % 50 == 0 or len(results) == len(inputs) or row["translation"]["status"] != "pass":
             print(f"{len(results)}/{len(inputs)} {stage}: " + ", ".join(
                 f"{step}={row[step]['status']}" for step in ("translation", "compilation", "validation") if step in row),
                   flush=True)
@@ -135,7 +137,7 @@ def probe(manifest_path, translator, common, dxc, output, per_stage=2, timeout=1
               "translator_sha256": hashlib.sha256(translator.read_bytes()).hexdigest(),
               "dxc_sha256": hashlib.sha256(dxc.read_bytes()).hexdigest(),
               "shader_common_sha256": hashlib.sha256(common.read_bytes()).hexdigest(),
-              "selection": "all-imported-vertex" if all_vertex else "evenly-spaced-family-stage",
+              "selection": "all-imported-vertex" if all_vertex else "all-imported-pixel" if all_pixel else "evenly-spaced-family-stage",
               "translation_only": translate_only,
               "limits": ["Metadata selection, not proof of observed runtime coverage.",
                          "Compilation success does not establish FH1 input/binding correctness or MoltenVK rendering.",
@@ -155,7 +157,9 @@ def main():
     parser.add_argument("--library-directory", type=Path)
     parser.add_argument("--validator", type=Path, help="Optional spirv-val executable")
     parser.add_argument("--per-stage", type=int, default=2)
-    parser.add_argument("--all-vertex", action="store_true", help="Select every imported vertex program (maximum 4,096)")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--all-vertex", action="store_true", help="Select every imported vertex program (maximum 4,096)")
+    selection.add_argument("--all-pixel", action="store_true", help="Select every imported pixel program (maximum 4,096)")
     parser.add_argument("--translate-only", action="store_true", help="Inventory fetch contracts without DXC compilation or validation")
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--output", type=Path, default=ROOT / "out/native-renderer/translation-probe")
@@ -172,7 +176,7 @@ def main():
             raise ValueError("Provide --tools or all of --translator, --shader-common and --dxc")
         report = probe(args.manifest, args.translator, args.shader_common, args.dxc, args.output,
                        args.per_stage, args.timeout, args.library_directory, args.validator,
-                       args.all_vertex, args.translate_only)
+                       args.all_vertex, args.translate_only, args.all_pixel)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f"Shader probe failed: {error}\n")
     print(json.dumps(report["summary"], indent=2))

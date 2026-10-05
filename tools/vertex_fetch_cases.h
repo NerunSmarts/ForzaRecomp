@@ -1,4 +1,5 @@
 #pragma once
+#include "validation_common.h"
 
 // Synthetic validation data and an independent scalar oracle. No game shaders.
 #include "../src/graphics/shader_contract.h"
@@ -10,7 +11,6 @@
 #include <vector>
 
 namespace fh1::validation {
-using Float4 = std::array<float, 4>;
 struct alignas(16) FetchCase {
   uint32_t slot = 0;
   float index = 0;
@@ -137,17 +137,6 @@ inline Float4 reference(const FetchCase& c, const std::vector<uint32_t>& words,
   return output;
 }
 
-inline bool matches(float actual, float expected) {
-  if (std::isnan(expected)) return std::isnan(actual);
-  if (std::isinf(expected)) return actual == expected;
-  if (!std::isfinite(actual)) return false;
-  if (actual == 0 && expected == 0) return std::signbit(actual) == std::signbit(expected);
-  return std::abs(actual - expected) <= std::max(1.0e-7f, std::abs(expected) * 2.0e-6f);
-}
-
-inline void require(bool condition, const char* message) {
-  if (!condition) throw std::runtime_error(message);
-}
 
 inline void validate_host_contract() {
   using namespace graphics;
