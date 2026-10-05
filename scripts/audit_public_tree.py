@@ -10,7 +10,7 @@ PRIVATE_SUFFIXES = {".xex", ".xexp", ".xexe", ".iso", ".bin", ".zip", ".dat", ".
                     ".fev", ".xds", ".xpr", ".wmv", ".slt", ".log", ".pem", ".key", ".p12",
                     ".bik", ".xma", ".xwb", ".bnk", ".exe", ".dll", ".dylib", ".so",
                     ".a", ".lib", ".o", ".obj", ".pdb", ".metallib", ".spv", ".mobileprovision",
-                    ".tracy", ".atrc"}
+                    ".tracy", ".atrc", ".fxobj"}
 PRIVATE_BUNDLE_SUFFIXES = {".trace", ".dsym", ".gputrace"}
 PRIVATE_ROOTS = {"fh1", "assets", "game", "games", "roms", "out", "build", ".tools",
                  "third_party", "saves", "cache", "logs", ".aws", ".codex", ".agents"}

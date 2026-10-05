@@ -30,6 +30,10 @@ The next platform work should follow this order:
    but that alone does not establish compatibility with the Xenos backend's
    shader, storage, synchronization, and texture requirements. Test those
    features on device, then add memory and thermal budgets.
+   The planned [native FH1 renderer](native-renderer.md) also uses Vulkan through
+   MoltenVK so its title bridge and rendering backend can remain shared with
+   desktop builds. Its host shader adapter is only a prototype; device feature
+   limits, shader import/compilation and resource budgets still require work.
 6. Provide user-controlled disc import into the app's container, save paths in
    its writable documents area, controller input, audio session handling, and
    suspend/resume behavior. Validate offline gameplay on macOS before using an

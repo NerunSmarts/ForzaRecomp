@@ -118,21 +118,18 @@ UI's depth or blending.
 
 ## Rewriting the renderer
 
-The current path translates Xenos commands and shaders to Vulkan, then uses
-MoltenVK to render through Metal. A direct Metal backend could reduce command
-translation overhead and allow Apple-specific handling of render targets and
-memory. It would still need correct Xenos shader semantics, tiled textures,
-EDRAM ownership, depth/stencil, and resolves. Changing the API does not by
-itself fix errors in those shared responsibilities.
+The selected replacement is a title-specific Vulkan renderer, using MoltenVK
+on Apple platforms and native Vulkan on future Linux/Windows targets. Preserve
+the existing Xenos path as the fallback. The performance opportunity is to
+bypass guest command construction and EDRAM emulation through verified FH1
+graphics hooks, using host resources and the game's own material shaders.
+Skate 3 demonstrates that a native renderer can perform well with MoltenVK;
+its reported multiplier is not an FH1 prediction.
 
-A replacement renderer hooked into FH1's scene submission could remove more
-GPU emulation work. That requires reconstructing cameras, geometry submission,
-materials, skinning, effects, and the relationship with the UI. It is a much
-larger reverse-engineering task than adding a Metal backend.
-
-No reliable performance multiplier is established for either option. A short
-trace-free CPU run and a sparse stack sample are insufficient to separate GPU
-execution, guest CPU work, synchronization, and API overhead. The successful
-world composite correction shows why checking individual stages was useful
-before replacing the backend. WMV hardware decoding remains deferred while
-world rendering and gameplay are validated.
+The implemented first stage imports all 174 local effect files and tests an
+FH1 adaptation of XenosRecomp. In a 40-program sample, 38 compile and pass
+Vulkan SPIR-V validation; two require undeclared vertex buffer fetch support.
+The game still uses the existing renderer. Native world passes, UI composition,
+resource lifetimes and a measured performance gain remain to be implemented.
+The architecture, commands, source references and next milestones are in
+[native-renderer.md](native-renderer.md). WMV hardware decoding remains deferred.

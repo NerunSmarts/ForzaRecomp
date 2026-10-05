@@ -1,0 +1,2 @@
+# Unified diffs retain upstream whitespace and blank context lines for replay.
+*.patch -whitespace

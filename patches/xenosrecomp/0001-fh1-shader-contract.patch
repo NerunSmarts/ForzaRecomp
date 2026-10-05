@@ -1,0 +1,295 @@
+diff --git a/XenosRecomp/CMakeLists.txt b/XenosRecomp/CMakeLists.txt
+index e505a5e..c56ec43 100644
+--- a/XenosRecomp/CMakeLists.txt
++++ b/XenosRecomp/CMakeLists.txt
+@@ -1,5 +1,7 @@
+ project(XenosRecomp)
+ 
++option(XENOS_RECOMP_FH1 "Use the experimental FH1 native shader contract" OFF)
++
+ if (WIN32)
+     option(XENOS_RECOMP_DXIL "Generate DXIL shader cache" ON)
+ endif()
+@@ -28,6 +30,10 @@ target_include_directories(XenosRecomp PRIVATE ${SMOLV_SOURCE_DIR})
+ 
+ target_precompile_headers(XenosRecomp PRIVATE pch.h)
+ 
++if (XENOS_RECOMP_FH1)
++    target_compile_definitions(XenosRecomp PRIVATE FH1_RECOMP)
++endif()
++
+ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+     target_compile_options(XenosRecomp PRIVATE -Wno-switch -Wno-unused-variable -Wno-null-arithmetic -fms-extensions)
+ 
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 1c74034..46f4b74 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -26,10 +26,18 @@ struct PushConstants
+ 
+ [[vk::push_constant]] ConstantBuffer<PushConstants> g_PushConstants;
+ 
++#ifdef FH1_RECOMP
++#define g_Fh1SamplerLodBias(SLOT)   vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 512 + (SLOT) * 4)
++#define g_Booleans                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 640)
++#define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 644)
++#define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 648)
++#define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 656)
++#else
+ #define g_Booleans                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 256)
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 264)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 272)
++#endif
+ 
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+@@ -37,11 +45,21 @@ struct PushConstants
+ 
+ #else
+ 
++#ifdef FH1_RECOMP
++#define DEFINE_SHARED_CONSTANTS() \
++    float4 g_Fh1SamplerLodBiasValues[8] : packoffset(c32); \
++    uint g_Booleans : packoffset(c40.x); \
++    uint g_SwappedTexcoords : packoffset(c40.y); \
++    float2 g_HalfPixelOffset : packoffset(c40.z); \
++    float g_AlphaThreshold : packoffset(c41.x);
++#define g_Fh1SamplerLodBias(SLOT) g_Fh1SamplerLodBiasValues[(SLOT) / 4][(SLOT) % 4]
++#else
+ #define DEFINE_SHARED_CONSTANTS() \
+     uint g_Booleans : packoffset(c16.x); \
+     uint g_SwappedTexcoords : packoffset(c16.y); \
+     float2 g_HalfPixelOffset : packoffset(c16.z); \
+     float g_AlphaThreshold : packoffset(c17.x);
++#endif
+ 
+ uint g_SpecConstants();
+ 
+@@ -159,6 +177,24 @@ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, flo
+     return g_TextureCubeDescriptorHeap[resourceDescriptorIndex].Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z]);
+ }
+ 
++#ifdef FH1_RECOMP
++float4 tfetch2DLevel(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset, float lod)
++{
++    Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
++    return texture.SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord + offset / getTexture2DDimensions(texture), lod);
++}
++
++float4 tfetch3DLevel(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord, float lod)
++{
++    return g_Texture3DDescriptorHeap[resourceDescriptorIndex].SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord, lod);
++}
++
++float4 tfetchCubeLevel(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord, inout CubeMapData cubeMapData, float lod)
++{
++    return g_TextureCubeDescriptorHeap[resourceDescriptorIndex].SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], cubeMapData.cubeMapDirections[texCoord.z], lod);
++}
++#endif
++
+ float4 tfetchR11G11B10(uint4 value)
+ {
+     if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 698a418..d231899 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -18,7 +18,11 @@ static constexpr const char* USAGE_TYPES[] =
+     "float4", // POSITION
+     "float4", // BLENDWEIGHT
+     "uint4", // BLENDINDICES
++#ifdef FH1_RECOMP
++    "float4", // NORMAL: host vertex conversion, not Sonic's packed normal ABI
++#else
+     "uint4", // NORMAL
++#endif
+     "float4", // PSIZE
+     "float4", // TEXCOORD
+     "uint4", // TANGENT
+@@ -77,6 +81,18 @@ struct DeclUsageLocation
+ // NOTE: These are specialized Vulkan locations for Unleashed Recompiled. Change as necessary. Likely not going to work with other games.
+ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+ {
++#ifdef FH1_RECOMP
++    { DeclUsage::Position, 0, 0 },
++    { DeclUsage::TexCoord, 0, 1 },
++    { DeclUsage::Normal, 0, 2 },
++    { DeclUsage::Normal, 1, 3 },
++    { DeclUsage::TexCoord, 1, 4 },
++    { DeclUsage::TexCoord, 2, 5 },
++    { DeclUsage::TexCoord, 3, 6 },
++    { DeclUsage::Color, 0, 7 },
++    { DeclUsage::BlendWeight, 0, 8 },
++    { DeclUsage::BlendIndices, 0, 9 },
++#else
+     { DeclUsage::Position, 0, 0 },
+     { DeclUsage::Normal, 0, 1 },
+     { DeclUsage::Tangent, 0, 2 },
+@@ -94,6 +110,7 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 6, 14 },
+     { DeclUsage::TexCoord, 7, 15 },
+     { DeclUsage::Position, 1, 15 },
++#endif
+ };
+ 
+ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+@@ -118,13 +135,19 @@ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+     { DeclUsage::Color, 1 }
+ };
+ 
+-static constexpr std::string_view TEXTURE_DIMENSIONS[] = 
++static constexpr std::string_view TEXTURE_DIMENSIONS[] =
+ {
+     "2D",
+     "3D", 
+     "Cube" 
+ };
+ 
++#ifdef FH1_RECOMP
++static constexpr uint32_t TEXTURE_SLOT_COUNT = 32;
++#else
++static constexpr uint32_t TEXTURE_SLOT_COUNT = 16;
++#endif
++
+ static FetchDestinationSwizzle getDestSwizzle(uint32_t dstSwizzle, uint32_t index)
+ {
+     return FetchDestinationSwizzle((dstSwizzle >> (index * 3)) & 0x7);
+@@ -177,6 +200,8 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+     out += " = ";
+ 
+     auto findResult = vertexElements.find(address);
++    if (findResult == vertexElements.end())
++        fprintf(stderr, "Missing vertex input: address=%u const=%u select=%u offset=%d stride=%u format=%u swizzle=%03X mini=%u\n", address, uint32_t(instr.constIndex), uint32_t(instr.constIndexSelect), int32_t(instr.offset), uint32_t(instr.stride), uint32_t(instr.format), uint32_t(instr.dstSwizzle), uint32_t(instr.isMiniFetch));
+     assert(findResult != vertexElements.end());
+ 
+     switch (findResult->second.usage)
+@@ -184,8 +209,10 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+     case DeclUsage::Normal:
+     case DeclUsage::Tangent:
+     case DeclUsage::Binormal:
++#ifndef FH1_RECOMP
+         specConstantsMask |= SPEC_CONSTANT_R11G11B10_NORMAL;
+         print("tfetchR11G11B10(");
++#endif
+         break;
+ 
+     case DeclUsage::TexCoord:
+@@ -200,7 +227,9 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+     case DeclUsage::Normal:
+     case DeclUsage::Tangent:
+     case DeclUsage::Binormal:
++#ifndef FH1_RECOMP
+         out += ')';
++#endif
+         break;
+ 
+     case DeclUsage::TexCoord:
+@@ -228,6 +257,13 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+     if (instr.opcode != FetchOpcode::TextureFetch && instr.opcode != FetchOpcode::GetTextureWeights)
+         return;
+ 
++#ifdef FH1_RECOMP
++    // Vertex stages have no implicit derivatives. Register LOD/gradients need
++    // a separate implementation; reject them rather than discard their state.
++    if (!isPixelShader)
++        assert(!instr.useRegLod && !instr.useRegGradients);
++#endif
++
+     if (instr.isPredicated)
+     {
+         indent();
+@@ -326,6 +362,11 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+ 
+     out += dimension;
+ 
++#ifdef FH1_RECOMP
++    if (!isPixelShader && instr.opcode == FetchOpcode::TextureFetch)
++        out += "Level";
++#endif
++
+ #ifdef UNLEASHED_RECOMP
+     if (bicubic)
+         out += "Bicubic";
+@@ -344,6 +385,11 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+         break;
+     }
+ 
++#ifdef FH1_RECOMP
++    if (!isPixelShader && instr.opcode == FetchOpcode::TextureFetch)
++        print(", g_Fh1SamplerLodBias({}) + {}", uint32_t(instr.constIndex), float(instr.lodBias) / 16.0f);
++#endif
++
+     out += ").";
+ 
+     printDstSwizzle(instr.dstSwizzle, true);
+@@ -1105,6 +1151,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     assert((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100);
+     assert(shaderContainer->constantTableOffset != NULL);
+ 
++#ifdef FH1_RECOMP
++    out += "#define FH1_RECOMP 1\n";
++#endif
+     out += include;
+     out += '\n';
+ 
+@@ -1171,16 +1220,22 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+         case RegisterSet::Sampler:
+         {
++            uint32_t samplerIndex = constantInfo->registerIndex;
++#ifdef FH1_RECOMP
++            assert(samplerIndex < 16);
++            if (!isPixelShader)
++                samplerIndex += 16;
++#endif
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("#define {}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+-                    constantName, TEXTURE_DIMENSIONS[j], j * 64 + constantInfo->registerIndex * 4);
++                    constantName, TEXTURE_DIMENSIONS[j], (j * TEXTURE_SLOT_COUNT + samplerIndex) * 4);
+             }
+ 
+             println("#define {}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+-                constantName, std::size(TEXTURE_DIMENSIONS) * 64 + constantInfo->registerIndex * 4);
++                constantName, (std::size(TEXTURE_DIMENSIONS) * TEXTURE_SLOT_COUNT + samplerIndex) * 4);
+ 
+-            samplers.emplace(constantInfo->registerIndex, constantName);
++            samplers.emplace(samplerIndex, constantName);
+             break;
+         }
+ 
+@@ -1229,15 +1284,21 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         if (constantInfo->registerSet == RegisterSet::Sampler)
+         {
+             const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
++            uint32_t samplerIndex = constantInfo->registerIndex;
++#ifdef FH1_RECOMP
++            assert(samplerIndex < 16);
++            if (!isPixelShader)
++                samplerIndex += 16;
++#endif
+ 
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("\tuint {}_Texture{}DescriptorIndex : packoffset(c{}.{});",
+-                    constantName, TEXTURE_DIMENSIONS[j], j * 4 + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++                    constantName, TEXTURE_DIMENSIONS[j], (j * TEXTURE_SLOT_COUNT + samplerIndex) / 4, SWIZZLES[samplerIndex % 4]);
+             }
+ 
+             println("\tuint {}_SamplerDescriptorIndex : packoffset(c{}.{});",
+-                constantName, 4 * std::size(TEXTURE_DIMENSIONS) + constantInfo->registerIndex / 4, SWIZZLES[constantInfo->registerIndex % 4]);
++                constantName, (TEXTURE_SLOT_COUNT * std::size(TEXTURE_DIMENSIONS) + samplerIndex) / 4, SWIZZLES[samplerIndex % 4]);
+         }
+     }
+ 
+@@ -1483,7 +1544,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     out += "\tint aL = 0;\n";
+     out += "\tbool p0 = false;\n";
+     out += "\tfloat ps = 0.0;\n";
++#ifndef FH1_RECOMP
+     if (isPixelShader)
++#endif
+     {
+ #ifdef UNLEASHED_RECOMP
+         out += "\tfloat2 pixelCoord = 0.0;\n";

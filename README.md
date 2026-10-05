@@ -7,6 +7,12 @@ using [ReXGlue](https://github.com/rexglue/rexglue-sdk). This is a development
 project. Build and module loading success do not establish playable gameplay.
 The current validation results are recorded in [docs/status.md](docs/status.md).
 
+A title-specific Vulkan renderer is in development, with MoltenVK on Apple
+platforms and the existing Xenos renderer retained as the fallback. The first
+stage imports the supplied game's effects, tests shader translation, and maps
+graphics hook candidates. Native FH1 draws and a performance gain have not yet
+been demonstrated. See [docs/native-renderer.md](docs/native-renderer.md).
+
 The project handles `default.xex`, `XMediaFacade_default.xex`, and
 `SpeechFacade_default.xex` as separate guest modules, and contains patches for
 ReXGlue's XEX allocation lifetime and code generation. The build uses Vulkan

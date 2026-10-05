@@ -32,7 +32,11 @@ multi-object waits. The measurements are recorded in [profiling.md](profiling.md
 | Idle alertable multi-object waits | Native one-second check drops from approximately 100% to 1.30% of one CPU core; event and callback checks pass |
 | 3D CPU profiling | Confirmed loaded scene: 20.70 seconds of samples, no WMV decoder frames; audio worker 0.36%, guest yielding 27.9%, GPU command thread 7.2% of sampled CPU work |
 | 3D GPU profiling | Combined trace saved but has only approximately 0.52 seconds of execution data; sustained GPU and frame-time comparison pending |
-| Public-tree and malformed-XEX checks | Eight tests pass; publication audit passes, including profiler data and symbol bundles |
+| Shader import | All 174 effect files parse; 207 declarations and 2,918 unique shader programs extracted locally with reflection and interfaces |
+| Experimental native shader adapter | Separate clean host-tool build passes; 38 of 40 sampled shaders compile and pass Vulkan SPIR-V validation; two undeclared buffer-fetch cases remain unsupported |
+| Graphics hook investigation | Direct-call map finds 21 Vd import groups; swap/init candidates identified, native resource/draw hooks still require verification |
+| Native renderer runtime | Planned Vulkan/MoltenVK backend with Xenos fallback; no native FH1 draw or speedup demonstrated yet |
+| Public-tree, malformed-input and shader-variant checks | 21 tests pass; publication audit passes, including effect objects, profiler data and symbol bundles |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
@@ -84,3 +88,10 @@ source policy. Game files, analysis metadata, decrypted images, binaries,
 captures, logs, saves, SDK downloads, and local credentials are ignored.
 There is no published build. Run the public
 tree audit before any commit or publication.
+
+The renderer replacement design and implemented shader-tool stage are recorded
+in [native-renderer.md](native-renderer.md). Shader tools bootstrap separately
+from the game, and do not modify its renderer. All extracted effect programs,
+reflection manifests, compiled shaders and correlation reports remain ignored.
+No additional performance trace was collected during this work; coordinate
+future recordings with the user before starting them.

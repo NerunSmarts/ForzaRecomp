@@ -28,6 +28,7 @@
 *.xma
 *.xwb
 *.bnk
+*.[fF][xX][oO][bB][jJ]
 
 # Native builds also contain translated game instructions.
 *.exe

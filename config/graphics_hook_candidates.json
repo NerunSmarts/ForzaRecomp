@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "status": "Static disassembly candidates; no runtime hooks are installed or validated",
+  "revision": "Only the disc revision verified by config/disc.json",
+  "deferred_stream_vtable": "0x820213DC",
+  "functions": [
+    {"module": "default", "function": "sub_82588110", "role": "Deferred indexed draw, three arguments", "payload_bytes": 16, "stream_vtable_slot": 39},
+    {"module": "default", "function": "sub_825881B0", "role": "Deferred indexed draw, four arguments", "payload_bytes": 20, "stream_vtable_slot": 38},
+    {"module": "default", "function": "sub_825880F0", "role": "Dispatch three-argument indexed draw from payload", "target_vtable_byte_offset": 156},
+    {"module": "default", "function": "sub_82588190", "role": "Dispatch four-argument indexed draw from payload", "target_vtable_byte_offset": 152},
+    {"module": "default", "function": "sub_823F4FE8", "role": "Shared deferred command enqueue wrapper; also appears in yielding CPU stacks"}
+  ],
+  "limits": [
+    "Argument values, resource layouts, thread ownership and lifetime need runtime validation",
+    "RTTI identifies indexed draw parameter types; it does not recover original developer signatures",
+    "The shared enqueue wrapper serves other work too; do not bypass it globally"
+  ]
+}

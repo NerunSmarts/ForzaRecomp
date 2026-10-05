@@ -24,6 +24,7 @@ class IgnoreTests(unittest.TestCase):
                        "out/user/profile", ".tools/rexglue-patched/bin/rexglue",
                        "third_party/rexglue-sdk/README.md", ".env", "local.p12",
                        "elsewhere/recompiled.dylib", "elsewhere/shader.spv",
+                       "elsewhere/material.fxobj", "elsewhere/MATERIAL.FXOBJ",
                        "elsewhere/shader_F00.spv.bin.vert", "elsewhere/shader_F00.ucode.vert",
                        "elsewhere/world.trace/core/session.xml", "elsewhere/world.tracy",
                        "elsewhere/world.gputrace/metadata.json",
@@ -78,6 +79,17 @@ class IgnoreTests(unittest.TestCase):
             subprocess.run(["git", "add", name], cwd=root, check=True)
             with patch.object(audit_public_tree, "ROOT", root):
                 with self.assertRaisesRegex(SystemExit, "shader_F00"):
+                    audit_public_tree.audit()
+
+    def test_audit_rejects_force_tracked_effect_outside_disc_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            name = "MATERIAL.FXOBJ"
+            (root / name).write_bytes(b"synthetic effect")
+            subprocess.run(["git", "add", name], cwd=root, check=True)
+            with patch.object(audit_public_tree, "ROOT", root):
+                with self.assertRaisesRegex(SystemExit, name):
                     audit_public_tree.audit()
 
     def test_audit_rejects_force_tracked_profiler_data_and_symbols(self):
