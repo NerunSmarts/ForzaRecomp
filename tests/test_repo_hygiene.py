@@ -24,7 +24,10 @@ class IgnoreTests(unittest.TestCase):
                        "out/user/profile", ".tools/rexglue-patched/bin/rexglue",
                        "third_party/rexglue-sdk/README.md", ".env", "local.p12",
                        "elsewhere/recompiled.dylib", "elsewhere/shader.spv",
-                       "elsewhere/shader_F00.spv.bin.vert", "elsewhere/shader_F00.ucode.vert"]
+                       "elsewhere/shader_F00.spv.bin.vert", "elsewhere/shader_F00.ucode.vert",
+                       "elsewhere/world.trace/core/session.xml", "elsewhere/world.tracy",
+                       "elsewhere/world.gputrace/metadata.json",
+                       "elsewhere/fh1.dSYM/Contents/Resources/DWARF/fh1"]
             public = [".gitignore", "CMakeLists.txt", "CMakePresets.json", "fh1_manifest.toml",
                       "generated/rexglue.cmake", "generated/default/fh1_recomp.0.cpp",
                       "generated/media/fh1_init.cpp", "generated/speech/fh1_funcs.h",
@@ -76,6 +79,20 @@ class IgnoreTests(unittest.TestCase):
             with patch.object(audit_public_tree, "ROOT", root):
                 with self.assertRaisesRegex(SystemExit, "shader_F00"):
                     audit_public_tree.audit()
+
+    def test_audit_rejects_force_tracked_profiler_data_and_symbols(self):
+        for name in ["world.trace/core/session.xml", "world.tracy", "world.atrc",
+                     "world.gputrace/metadata.json", "fh1.dSYM/Contents/Resources/DWARF/fh1"]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Synthetic profiler data\n")
+                subprocess.run(["git", "add", name], cwd=root, check=True)
+                with patch.object(audit_public_tree, "ROOT", root):
+                    with self.assertRaisesRegex(SystemExit, name):
+                        audit_public_tree.audit()
 
 
 if __name__ == "__main__":

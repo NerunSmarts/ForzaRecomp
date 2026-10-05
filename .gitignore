@@ -38,6 +38,11 @@
 *.lib
 *.o
 *.obj
+*.trace/
+*.tracy
+*.atrc
+*.gputrace/
+*.dSYM/
 *.pdb
 *.metallib
 *.spv

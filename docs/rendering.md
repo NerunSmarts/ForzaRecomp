@@ -2,8 +2,11 @@
 
 The 3D scene is visible in the macOS window as of 2026-10-05, confirmed by
 the user. The original world shaders produce textured terrain, trees and cars.
-Visible surface artifacts remain, and complete driving, collision, saves and
-steady performance still need validation.
+The user initially reported no surface artifacts beyond wireframe. A later
+test still shows wireframe-like edges on cars with both
+`fh1_debug_wireframe=false` and `vulkan_tessellation_wireframe=false` explicitly
+set. The cause of those edges remains unresolved. Complete driving, collision,
+saves, normal shaded rendering and steady performance still need validation.
 
 The black-world failure was in the SPIR-V rectangle-list vertex fallback.
 Metal lacks geometry shaders, so this fallback runs the guest vertex shader
@@ -104,12 +107,14 @@ The preview script uses a diagnostic square-root curve for visibility, rather
 than reproducing the game's tone mapping. Raw images stay unchanged. Captures,
 shader dumps, previews and logs belong under ignored `out/` and stay private.
 
-The next correctness work is to isolate the visible surface artifacts through
-vertex attributes, sampling and material shader results. Performance work
-should measure frame times with captures and tracing disabled, separating
-compilation from steady rendering and guest CPU work. A Metal frame capture
-can inspect the actual draw and resource bindings if narrower readbacks do
-not resolve the remaining artifacts.
+The next performance work is profiling loaded 3D scenes with diagnostic
+wireframe, captures and tracing off. Separate compilation from steady
+rendering and guest CPU work. The macOS profiling workflow is documented in
+[profiling.md](profiling.md). The car edges need a separate inspection of the
+car draws' guest polygon mode, translated shaders and resource bindings;
+disabling diagnostic wireframe alone does not remove them. A Metal frame
+capture can inspect the actual draw state without globally overriding the
+UI's depth or blending.
 
 ## Rewriting the renderer
 

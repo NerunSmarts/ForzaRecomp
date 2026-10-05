@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_SUFFIXES = {".xex", ".xexp", ".xexe", ".iso", ".bin", ".zip", ".dat", ".fsb",
                     ".fev", ".xds", ".xpr", ".wmv", ".slt", ".log", ".pem", ".key", ".p12",
                     ".bik", ".xma", ".xwb", ".bnk", ".exe", ".dll", ".dylib", ".so",
-                    ".a", ".lib", ".o", ".obj", ".pdb", ".metallib", ".spv", ".mobileprovision"}
+                    ".a", ".lib", ".o", ".obj", ".pdb", ".metallib", ".spv", ".mobileprovision",
+                    ".tracy", ".atrc"}
+PRIVATE_BUNDLE_SUFFIXES = {".trace", ".dsym", ".gputrace"}
 PRIVATE_ROOTS = {"fh1", "assets", "game", "games", "roms", "out", "build", ".tools",
                  "third_party", "saves", "cache", "logs", ".aws", ".codex", ".agents"}
 
@@ -22,6 +24,8 @@ def audit(environment=None):
     for name in sorted(names):
         path = PurePosixPath(name)
         private = path.parts[0].lower() in PRIVATE_ROOTS or path.suffix.lower() in PRIVATE_SUFFIXES
+        private |= any(PurePosixPath(part).suffix.lower() in PRIVATE_BUNDLE_SUFFIXES
+                       for part in path.parts)
         private |= (path.parts[0] == "generated"
                     and name != "generated/rexglue.cmake"
                     and path.suffix.lower() not in {".cpp", ".h"})

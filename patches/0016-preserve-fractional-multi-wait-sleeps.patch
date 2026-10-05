@@ -1,0 +1,16 @@
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -414,9 +414,9 @@
+       if (timeout == std::chrono::milliseconds::max()) {
+         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+       } else {
+-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
+-        std::this_thread::sleep_for(sleep_time);
++        // Alertable waits use 1 ms slices. Rounding the remaining fraction
++        // down to whole milliseconds makes every slice a busy wait.
++        std::this_thread::sleep_until(std::min(end_time, now + std::chrono::milliseconds(1)));
+       }
+     }
+   }

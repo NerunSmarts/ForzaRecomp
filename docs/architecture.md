@@ -149,7 +149,16 @@ write access for compute writes to shared GPU memory, including resolves.
 `patches/0015-capture-world-rendering-stages.patch` adds one-frame asynchronous
 readbacks of host targets, EDRAM, resolved guest memory and reloaded textures.
 Captures are disabled by default and stay private. The successful world
-rendering check and remaining artifacts are documented in [rendering.md](rendering.md).
+rendering check and remaining validation are documented in [rendering.md](rendering.md).
+
+`patches/0016-preserve-fractional-multi-wait-sleeps.patch` preserves the
+fractional remainder of finite POSIX multi-object waits. Alertable waits use
+1 ms slices; truncating their remaining sleep to whole milliseconds turned
+each slice into a busy loop. Sleeping until the earlier of the slice deadline
+and the next 1 ms poll preserves the existing polling cadence. The native
+`fh1_wait_smoke` tool checks timeout duration, event selection and consumption,
+queued callbacks, and idle CPU usage. The profiling evidence and comparison
+limits are recorded in [profiling.md](profiling.md).
 
 The project's publication policy permits generated C++ and headers alongside
 configuration, tooling, runtime patches, and documentation. These files are

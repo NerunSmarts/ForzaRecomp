@@ -4,7 +4,9 @@ This is a working native boot and presentation bring-up. Full gameplay and an
 iOS build remain unverified.
 Graphics work through 2026-10-05 adds four further patches, including the
 rectangle-shader control-flow correction that restores the visible 3D scene.
-The findings and remaining artifacts are recorded in [rendering.md](rendering.md).
+The findings and remaining validation are recorded in [rendering.md](rendering.md).
+Profiling adds a sixteenth patch to remove busy polling from finite POSIX
+multi-object waits. The measurements are recorded in [profiling.md](profiling.md).
 
 | Check | Result |
 | --- | --- |
@@ -16,18 +18,21 @@ The findings and remaining artifacts are recorded in [rendering.md](rendering.md
 | Bounded 30-, 50- and 60-second boot diagnostics | Processes remain alive; timeout stops are intentional |
 | Animated startup logos and Press Start background | Successive 1280×720 guest captures show changing frames |
 | Window presentation | Windowed launch displays video; user confirmed visible output |
-| Audio | User confirmed audible output |
+| Audio | User confirmed audible output, including the 3D run after the POSIX wait fix |
 | Transparent UI artifacts | User confirmed stable after presenter-cache and worker-wait fixes |
 | Menu CPU comparison | Early playback snapshots: approximately 213% before worker backoff, 167% after |
 | Menu thermals | User reports slower onset of throttling after presenter caching and worker backoff; throttling persists |
 | World loading and input | Passes the earlier missing callbacks; driving HUD and throttle response observed |
 | World rendering | Textured terrain, upright trees and cars appear in display captures; user confirms visible 3D after rectangle-shader restart fix |
-| Rendering quality and performance | Surface artifacts remain; steady frame rate and complete gameplay unverified |
+| Rendering quality and performance | Car edges persist with both diagnostic wireframe options explicitly false; cause, steady frame rate and complete gameplay need validation |
 | Branch-containing rectangle shaders | Missing SPIR-V restart predecessor reproduced, corrected, and absent in 437 dumped modules |
 | VMX arithmetic helpers | Fusion, signed zero, lane order, overflow, non-finite inputs and denormals pass |
 | ARM integer vector helpers | Full shift-count ranges, byte value/count pairs, permutation controls and mixed random lanes pass scalar references |
 | ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
-| Public-tree and malformed-XEX checks | Seven tests pass; publication audit passes |
+| Idle alertable multi-object waits | Native one-second check drops from approximately 100% to 1.30% of one CPU core; event and callback checks pass |
+| 3D CPU profiling | Confirmed loaded scene: 20.70 seconds of samples, no WMV decoder frames; audio worker 0.36%, guest yielding 27.9%, GPU command thread 7.2% of sampled CPU work |
+| 3D GPU profiling | Combined trace saved but has only approximately 0.52 seconds of execution data; sustained GPU and frame-time comparison pending |
+| Public-tree and malformed-XEX checks | Eight tests pass; publication audit passes, including profiler data and symbol bundles |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
@@ -50,15 +55,15 @@ also reduce the decoder's permutation and shift overhead; isolated helper
 benchmarks show roughly 1.5x and 3x speedups respectively. These numbers do not
 describe whole-game performance. The media facade still decodes 1280×720 WMV3
 videos in translated guest code. A host video decoder bridge and hardware
-decoding are not implemented. Further performance work should profile that
-decoder separately from GPU compilation and rendering.
+decoding are not implemented. Current performance work targets 3D scenes;
+profile that decoder separately from GPU compilation and rendering later.
 
 The final ARM playback check measures process CPU-time deltas without a stack
 sampler, and delays framebuffer readback until 40 seconds. It is a short
 functional and CPU check, with no controlled temperature or clock measurement.
 Longer thermal behavior after the integer-vector changes remains unverified.
 
-Remaining validation covers rendering artifacts, steady frame rate, driving, collision,
+Remaining validation covers normal shaded rendering, steady frame rate, driving, collision,
 saves, facade unload during real guest execution, and extended runtime
 stability. ReXGlue still reports unimplemented kernel exports and MoltenVK
 primitive-restart warnings; a surviving process does not establish correct

@@ -57,6 +57,7 @@ python3 scripts/audit_public_tree.py
 out/build/mac-arm64/fh1_xex_inspect FH1 out/images
 out/build/mac-arm64/fh1_module_smoke FH1
 out/build/mac-arm64/fh1_vmx_smoke
+out/build/mac-arm64/fh1_wait_smoke
 python3 scripts/smoke_boot.py --seconds 20
 ```
 
@@ -66,6 +67,8 @@ unload/reload without invoking `DllMain`. The bounded boot diagnostic launches
 the game and stops it after the interval; remaining alive is only a diagnostic
 result. Codegen output is checked for unresolved fatal calls and silently
 discarded branches before the build proceeds.
+The wait smoke tool checks event consumption, alertable callbacks and idle
+multi-object wait CPU usage without loading game files.
 The boot diagnostic writes a separate `out/logs/boot-runtime.log` and attempts
 guest framebuffer captures in `out/logs/boot-frame.ppm` and numbered snapshots
 every two seconds. These capture only the game output and stay ignored by Git.
@@ -102,7 +105,8 @@ game instructions and is a private build artifact too.
 
 [docs/architecture.md](docs/architecture.md) explains the module design and
 runtime patches. [docs/rendering.md](docs/rendering.md) records the world-composite
-fix, remaining rendering artifacts and opt-in diagnostics.
+fix and opt-in diagnostics. [docs/profiling.md](docs/profiling.md) describes
+profiling 3D scenes on macOS.
 [docs/ios-port.md](docs/ios-port.md) describes the remaining
 iOS work. There is no validated iOS build target yet.
 The planned first-launch disc installer is described in
