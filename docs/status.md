@@ -6,8 +6,10 @@ Graphics work through 2026-10-05 adds four further patches, including the
 rectangle-shader control-flow correction that restores the visible 3D scene.
 The findings and remaining validation are recorded in [rendering.md](rendering.md).
 Profiling adds a sixteenth patch to remove busy polling from finite POSIX
-multi-object waits. Patch 17 prepares a disabled-by-default, bounded GPU draw
-input snapshot; its build passes and game execution remains pending. The measurements are recorded in [profiling.md](profiling.md).
+multi-object waits. Patch 17 adds a disabled-by-default, bounded GPU draw-input
+snapshot, now exercised successfully in a confirmed 3D scene. Patch 18 adds
+offline interpreter snapshot reads and fixes packed-component decoding in that
+CPU interpreter. The measurements are recorded in [profiling.md](profiling.md).
 
 | Check | Result |
 | --- | --- |
@@ -32,16 +34,17 @@ input snapshot; its build passes and game execution remains pending. The measure
 | ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
 | Idle alertable multi-object waits | Native one-second check drops from approximately 100% to 1.30% of one CPU core; event and callback checks pass |
 | 3D CPU profiling | Confirmed loaded scene: 20.70 seconds of samples, no WMV decoder frames; audio worker 0.36%, guest yielding 27.9%, GPU command thread 7.2% of sampled CPU work |
-| 3D GPU profiling | Combined trace saved but has only approximately 0.52 seconds of execution data; sustained GPU and frame-time comparison pending |
+| 3D GPU profiling | Confirmed short Metal trace: 5.48 seconds of GPU activity; fragment intervals cover 83.8%, any FH1 channel 91.3%; shader counters and uninstrumented FPS comparison pending |
 | Shader import | All 174 effect files parse; 207 declarations and 2,918 unique shader programs extracted locally with reflection and interfaces |
 | Experimental native shader adapter | All 2,918 imported programs (1,511 vertex / 1,407 pixel) translate, compile and pass SPIR-V validation; full boolean banks, conditional clauses and constant operand addressing fixed |
-| Native buffer-fetch correctness | All 15 formats plus full/mini address reuse implemented; host binding preflight and 4,013 synthetic MoltenVK cases pass on Apple M2; original-material draw still needs captured resources |
+| Native buffer-fetch correctness | All 15 formats plus full/mini address reuse implemented; host binding preflight and 4,013 synthetic MoltenVK cases pass on Apple M2; captured VF89/VF90 and mesh ranges pass native replay preflight |
 | Native shader execution correctness | 1,336 synthetic MoltenVK cases pass for both stages; boolean banks, conditional ends/predicates and relative constants checked; deliberately wrong compiled shaders produce detected mismatches |
-| Draw input capture | SDK patch builds; GPU shared-memory geometry/register snapshot is opt-in and has not run in FH1; texture images and native draw submission pending |
+| Draw input capture | Confirmed 3D run saves a validated 34,588-byte snapshot with GPU geometry, indices, constants and shaders; textures and native draw submission pending |
+| Captured vertex execution | 189 MoltenVK comparisons pass for position and six reflected interpolators across 27 non-reset entries; 768 original packed-fetch interpreter checks pass; no native rasterization or presentation yet |
 | Graphics hook investigation | Direct-call map finds 21 Vd import groups; swap/init candidates identified, native resource/draw hooks still require verification |
 | Native renderer runtime | Planned Vulkan/MoltenVK backend with Xenos fallback; no native FH1 draw or speedup demonstrated yet |
-| Public-tree, malformed-input and shader-variant checks | 41 tests pass, including native ABI goldens under UBSan, draw-input bounds, shader fixtures, resource-slot conflicts and overlapping dependency patch replay; publication audit passes |
-| SDK bootstrap | Both 17 SDK patches and four shader patches replay from pinned source and repeat idempotently; clean downloaded SDK rebuild not tested |
+| Public-tree, malformed-input and shader-variant checks | 46 tests pass, including index endian/restart/identity, bounded replay, native ABI goldens under UBSan, draw-input bounds, shader fixtures, resource-slot conflicts and overlapping dependency patch replay; publication audit passes |
+| SDK bootstrap | All 18 SDK patches and four shader patches replay from pinned source and repeat idempotently; clean downloaded SDK rebuild not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
 window. The SDK defaults to fullscreen. The host now starts in a regular

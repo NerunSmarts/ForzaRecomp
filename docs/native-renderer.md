@@ -5,7 +5,9 @@ macOS and eventually iOS, and native Vulkan on Windows and Linux. The existing
 Xenos renderer remains the working fallback. This document describes the
 architecture and the implemented import, translation-probe and discovery
 stage. All imported programs now compile and validate as SPIR-V; original
-synthetic programs also pass offscreen execution checks. Native FH1
+synthetic programs also pass offscreen execution checks. One captured FH1
+vertex variant now matches the fallback interpreter in offscreen execution.
+Native FH1
 drawing, a complete runtime shader cache, renderer switching and a performance
 gain are not yet implemented or demonstrated.
 
@@ -35,7 +37,12 @@ the need to reconstruct these title-specific responsibilities.
 The current loaded-scene CPU profile attributes 7.2% of sampled CPU work to the
 GPU command thread and 27.9% to guest yielding. These are CPU sample shares,
 not GPU time or frame-time bounds. The combined GPU recording has only about
-half a second of useful execution data. A renderer rewrite therefore needs
+half a second of useful execution data. A subsequent short Metal System Trace
+has 5.48 seconds of usable GPU activity: FH1 fragment intervals cover about
+84% of that window, vertex intervals 5.5%, and combined GPU activity 91%.
+Overlapping intervals are merged rather than added. This supports prioritizing
+pixel shading and render-pass work; the trace has no shader counters and does
+not establish an uninstrumented frame rate. A renderer rewrite needs
 its own controlled comparison; see [profiling.md](profiling.md).
 
 ## Implemented first stage
@@ -342,11 +349,12 @@ calls need strong symbol overrides of the generated weak functions; changing
 only the indirect dispatch table will miss them. An observer hook must call
 the original `__imp__sub_*` implementation and preserve guest behavior.
 
-## Prepared draw input capture
+## Draw input capture and vertex replay
 
 SDK patch 17 adds `vulkan_debug_capture_draw_inputs` (empty by default) and
-`vulkan_debug_capture_draw_frame` (minimum frame). The implementation builds
-but has **not been exercised in FH1**. Coordinate a short 3D input recording
+`vulkan_debug_capture_draw_frame` (minimum frame). A user-confirmed loaded 3D
+recording on 2026-10-05 saved one complete snapshot, and its shader hashes,
+registers and all input ranges pass validation. Coordinate a short 3D input recording
 with the user before enabling it; it synchronizes the queue and cannot be
 used to measure normal frame times.
 
@@ -387,8 +395,54 @@ constant banks and all eight boolean words, retaining base vertex and draw
 index bounds. It preserves invalid-fetch compatibility type 1 for explicit
 later handling; native binding preflight currently requires type 3. This is
 input validation, not residency, complete resource coverage or a native draw.
-Shader variant selection, declaration conversion, texture/image capture and
-native submission/presentation remain the next steps.
+
+`tools/replay_draw_vertices.py` finds a single compatible imported vertex
+container, verifies its microcode and fetch contracts, and substitutes the
+captured runtime microcode into that container's reflected interface. FH1
+patches mesh layouts and swizzles at runtime; translating only the unmodified
+container would lose that state. The offline adapter decodes the actual mesh
+layouts, preserves original index order and identity, removes enabled strip
+reset markers before applying the base vertex and 24-bit mask/clamp, and binds
+owned GPU readback ranges through the native ABI. The buffers remain alive
+until the compute fence completes. Dynamic/integer mesh inputs, vertex textures,
+loops and calls are rejected pending their own adapters.
+
+SDK patch 18 lets the shader interpreter read a bounded sparse snapshot without
+creating a full guest address space. It also corrects two packed-fetch defects
+in the CPU interpreter: uninitialized component-zero offsets and missing
+unsigned component shifts. They caused incorrect position and UV references in
+the first replays. The fixed interpreter now matches the unchanged translator
+through MoltenVK for **all 189 comparisons**: position and six reflected
+interpolators across 27 non-reset index entries. The snapshot contains 34,588
+bytes across VF89, VF90, the mesh binding and original DMA indices, including
+three strip-reset separators. Its vertex path uses packed morph data and
+float4 extra-buffer reads.
+
+```sh
+# Refresh fetch contracts after rebuilding the translator.
+python3 tools/probe_fh1_shader_translation.py \
+  out/native-renderer/shaders/manifest.json \
+  --tools .tools/fh1-shaders/tools.json --all-vertex --translate-only \
+  --output out/native-renderer/vertex-contracts
+python3 tools/replay_draw_vertices.py out/native-renderer/DRAW-CAPTURE \
+  out/native-renderer/shaders/manifest.json \
+  --shader-contracts out/native-renderer/vertex-contracts/report.json \
+  --output out/native-renderer/vertex-replay
+```
+
+The comparison checks guest clip positions before viewport conversion and all
+reflected interpolators, using the fallback interpreter as the independent
+instruction implementation and a relative float tolerance of `2e-6`. It does
+not compare pixel shading, rasterization, textures or Xbox hardware output.
+The shader is called from compute, so no native draw reaches the window yet.
+The replay tool also checks 768 original packed-fetch fixtures against the
+independent scalar oracle; it can run those alone with `--check-interpreter`.
+The existing 5,349 synthetic GPU cases pass with the shared harness's captured
+buffer rebasing support.
+
+Texture/image capture, original pixel execution and native indexed rasterization
+are the next proof steps. The measured fragment cost makes those especially
+important. The existing renderer remains the runtime path.
 
 ## Runtime architecture to implement
 

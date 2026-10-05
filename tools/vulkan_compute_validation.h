@@ -92,7 +92,8 @@ struct Context {
 template<class Suite, class Oracle>
 void validate_compute(const char* path, const Suite& suite, Oracle reference,
                       const std::vector<Float4>& vertex_constants = {},
-                      const std::vector<Float4>& pixel_constants = {}) {
+                      const std::vector<Float4>& pixel_constants = {},
+                      const std::vector<std::pair<uint32_t, uint64_t>>& fetch_offsets = {}) {
   Context context;
   auto application = vk_info<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
   application.pApplicationName = "FH1 synthetic shader validation";
@@ -168,6 +169,18 @@ void validate_compute(const char* path, const Suite& suite, Oracle reference,
   for (auto& binding : gpu_shared.vertex_fetch) {
     if (binding.device_address == 4) binding.device_address = data.address;
     else if (binding.device_address == 5) binding.device_address = data.address + 1;
+  }
+  std::array<bool, 96> rebound{};
+  for (const auto& [slot, offset] : fetch_offsets) {
+    require(slot < 96 && !rebound[slot], "Invalid or duplicate captured fetch slot");
+    rebound[slot] = true;
+    auto& binding = gpu_shared.vertex_fetch[slot];
+    const uint64_t bytes = uint64_t(binding.word_count) * 4;
+    require(binding.word_count && binding.word_count <= 0xFFFFFF && binding.endian < 4 &&
+            !(offset & 3) && offset <= suite.words.size() * 4 &&
+            bytes <= suite.words.size() * 4 - offset,
+            "Captured fetch exceeds its owned validation buffer");
+    binding.device_address = data.address + offset;
   }
   std::memcpy(shared.mapped, &gpu_shared, sizeof(gpu_shared));
   std::memcpy(cases.mapped, suite.cases.data(), suite.cases.size() * sizeof(typename decltype(suite.cases)::value_type));

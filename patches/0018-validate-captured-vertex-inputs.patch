@@ -1,0 +1,74 @@
+diff --git a/include/rex/graphics/pipeline/shader/interpreter.h b/include/rex/graphics/pipeline/shader/interpreter.h
+--- a/include/rex/graphics/pipeline/shader/interpreter.h
++++ b/include/rex/graphics/pipeline/shader/interpreter.h
+@@ -27,7 +27,17 @@
+ class ShaderInterpreter {
+  public:
+   ShaderInterpreter(const RegisterFile& register_file, const memory::Memory& memory)
+-      : register_file_(register_file), memory_(memory) {}
++      : register_file_(register_file), memory_(&memory) {}
++
++  // Offline diagnostics may supply sparse, owned GPU input snapshots instead
++  // of allocating a complete guest address space. Addresses are physical byte
++  // addresses; the reader must reject any word outside its captured ranges.
++  using VertexDataReader = uint32_t (*)(void* context, uint32_t address);
++  ShaderInterpreter(const RegisterFile& register_file, VertexDataReader reader, void* context)
++      : register_file_(register_file), memory_(nullptr), vertex_data_reader_(reader),
++        vertex_data_context_(context) {
++    assert_not_null(reader);
++  }
+ 
+   class ExportSink {
+    public:
+@@ -119,7 +129,9 @@
+   void ExecuteVertexFetchInstruction(ucode::VertexFetchInstruction instr);
+ 
+   const RegisterFile& register_file_;
+-  const memory::Memory& memory_;
++  const memory::Memory* memory_;
++  VertexDataReader vertex_data_reader_ = nullptr;
++  void* vertex_data_context_ = nullptr;
+ 
+   ExportSink* export_sink_ = nullptr;
+ 
+diff --git a/src/graphics/pipeline/shader/interpreter.cpp b/src/graphics/pipeline/shader/interpreter.cpp
+--- a/src/graphics/pipeline/shader/interpreter.cpp
++++ b/src/graphics/pipeline/shader/interpreter.cpp
+@@ -949,7 +949,8 @@
+       xenos::GetVertexFormatNeededWords(instr.data_format(), used_result_components);
+   if (needed_dwords) {
+     uint32_t data[4] = {};
+-    const uint32_t* memory_dwords = reinterpret_cast<const uint32_t*>(memory_.physical_membase());
++    const uint32_t* memory_dwords =
++        memory_ ? reinterpret_cast<const uint32_t*>(memory_->physical_membase()) : nullptr;
+     uint32_t buffer_end_dwords = fetch_constant.address + fetch_constant.size;
+     uint32_t dword_0_address_dwords =
+         uint32_t(int32_t(state_.vfetch_address_dwords) + instr.offset());
+@@ -961,13 +962,15 @@
+       uint32_t dword_address_dwords = dword_0_address_dwords + i;
+       if (dword_address_dwords >= fetch_constant.address &&
+           dword_address_dwords < buffer_end_dwords) {
+-        dword_value = xenos::GpuSwap(memory_dwords[dword_address_dwords], fetch_constant.endian);
++        uint32_t raw = memory_dwords ? memory_dwords[dword_address_dwords]
++                                    : vertex_data_reader_(vertex_data_context_, dword_address_dwords * 4);
++        dword_value = xenos::GpuSwap(raw, fetch_constant.endian);
+       }
+       data[i] = dword_value;
+     }
+ 
+     uint32_t packed_components = 0b0000;
+-    uint32_t packed_widths[4], packed_offsets[4];
++    uint32_t packed_widths[4] = {}, packed_offsets[4] = {};
+     uint32_t packed_dwords[] = {data[0], data[0]};
+     switch (instr.data_format()) {
+       case xenos::VertexFormat::k_8_8_8_8: {
+@@ -1107,7 +1110,8 @@
+             continue;
+           }
+           uint32_t packed_width = packed_widths[i];
+-          result[i] = float(packed_dwords[i >> 1] & ((UINT32_C(1) << packed_widths[i]) - 1));
++          result[i] = float((packed_dwords[i >> 1] >> packed_offsets[i]) &
++                            ((UINT32_C(1) << packed_widths[i]) - 1));
+         }
+         if (instr.is_normalized()) {
+           for (uint32_t i = 0; i < 4; ++i) {

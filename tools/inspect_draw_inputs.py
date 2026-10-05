@@ -159,7 +159,7 @@ def inspect(directory, output, library):
               "base_vertex": capture.registers[0x2102] & 0xFFFFFF,
               "invalid_fetch_slots": [r["slot"] for r in capture.metadata["ranges"] if r["slot"] != INDEX_SLOT
                                       and (capture.registers[0x4800 + r["slot"] * 2] & 3) != 3],
-              "limits": ["Input consistency validation; GPU capture execution and timing still need a game run.",
+              "limits": ["Input consistency validation; this report does not prove shader execution or measure capture timing.",
                          "Original indices retain their endian and identity; no primitive conversion or restart rewriting is performed.",
                          "Texture images, render-target state replay, shader variant selection and native presentation are pending.",
                          "Existing invalid-fetch compatibility records need explicit handling before native binding preflight accepts them."]}

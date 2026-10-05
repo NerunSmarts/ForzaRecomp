@@ -66,7 +66,7 @@ def main():
     run("cmake", "--build", str(build), "--target", "rexruntime", "rexglue", "rexgpu-xenos",
         "-j", "4")
     # Retain dependency libraries at the same source revision; replace the
-    # Release runtime, CLI, graphics plugin and changed public header.
+    # Release runtime, CLI, graphics plugin and changed public headers.
     patched = tools / "rexglue-patched"
     shutil.copytree(official, patched, dirs_exist_ok=True)
     output = source / "out/mac-arm64"
@@ -76,6 +76,8 @@ def main():
     shutil.copy2(source / "include/rex/system/xex_module.h",
                  patched / "include/rex/system/xex_module.h")
     shutil.copy2(source / "include/rex/ppc/intrinsics.h", patched / "include/rex/ppc/intrinsics.h")
+    shutil.copy2(source / "include/rex/graphics/pipeline/shader/interpreter.h",
+                 patched / "include/rex/graphics/pipeline/shader/interpreter.h")
     print(f"Patched Release SDK ready: {patched}")
 
 

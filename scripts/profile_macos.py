@@ -56,6 +56,8 @@ def main():
                         default="Game Performance")
     parser.add_argument("--seconds", type=int, default=20, help="Recording duration (1–120 seconds)")
     parser.add_argument("--delay", type=int, default=90, help="Warm-up before recording (0–600 seconds)")
+    parser.add_argument("--finalization-seconds", type=int, default=300,
+                        help="Maximum Instruments setup/save overhead (15–900 seconds)")
     parser.add_argument("--attach", type=int, help="Profile an existing PID; leave that process running")
     parser.add_argument("--input-script", type=Path, help="Optional guest controller script for a new launch")
     parser.add_argument("--output", type=Path, help="New private output directory under out/")
@@ -66,6 +68,8 @@ def main():
         parser.error("Instruments requires macOS and Xcode")
     if not 1 <= args.seconds <= 120 or not 0 <= args.delay <= 600:
         parser.error("--seconds must be 1–120 and --delay must be 0–600")
+    if not 15 <= args.finalization_seconds <= 900:
+        parser.error("--finalization-seconds must be 15–900")
     if args.attach is not None and args.attach <= 0:
         parser.error("--attach must be a positive PID")
     if args.attach and (args.input_script or args.game_args):
@@ -83,6 +87,7 @@ def main():
     trace = folder / "profile.trace"
     metadata = dict(template=args.template, warmup_seconds=args.delay,
                     requested_recording_seconds=args.seconds, started_utc=stamp,
+                    maximum_finalization_seconds=args.finalization_seconds,
                     commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
                                                    text=True).strip(), attached=bool(args.attach),
                     label=args.label, binary_sha256=binary_hashes())
@@ -107,7 +112,8 @@ def main():
                            "--log_level=warning", *runtime_args,
                            "--fh1_debug_wireframe=false", "--vulkan_tessellation_wireframe=false",
                            "--vulkan_draw_trace_interval=0",
-                           "--vulkan_debug_capture_targets=", "--dump_shaders="]
+                           "--vulkan_debug_capture_targets=", "--dump_shaders=",
+                           "--vulkan_debug_capture_draw_inputs="]
                 metadata["command"] = command
                 metadata["input_script"] = str(args.input_script.resolve()) if args.input_script else None
                 game = subprocess.Popen(command, cwd=ROOT, env=env, stdout=game_output,
@@ -154,7 +160,7 @@ def main():
                     if profiler.returncode:
                         raise RuntimeError(f"Instruments failed; see {folder / 'instruments.log'}")
                     break
-                if recording and now - start > args.delay + args.seconds + 90:
+                if recording and now - start > args.delay + args.seconds + args.finalization_seconds:
                     profiler.send_signal(signal.SIGINT)
                     try:
                         profiler.wait(timeout=15)
@@ -167,6 +173,7 @@ def main():
             metadata["finished_seconds"] = round(time.monotonic() - start, 3)
         subprocess.run(["xcrun", "xctrace", "export", "--input", str(trace), "--toc",
                         "--output", str(folder / "trace-toc.xml")], check=True)
+        metadata["trace_validated"] = True
         print(f"Recorded {trace}\nOpen with: open {trace}", flush=True)
     except KeyboardInterrupt:
         metadata["interrupted"] = True
@@ -176,6 +183,10 @@ def main():
                 profiler.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 stop(profiler)
+        raise
+    except Exception as error:
+        metadata["error"] = str(error)
+        metadata["trace_validated"] = False
         raise
     finally:
         stop(profiler)

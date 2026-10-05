@@ -27,7 +27,8 @@ For a running game, first disable rendering diagnostics at launch:
 ```sh
 sh scripts/run_macos.sh --mnk_mode=true --fh1_debug_wireframe=false \
   --vulkan_tessellation_wireframe=false --vulkan_draw_trace_interval=0 \
-  --vulkan_debug_capture_targets= --dump_shaders=
+  --vulkan_debug_capture_targets= --dump_shaders= \
+  --vulkan_debug_capture_draw_inputs=
 ```
 
 Keep `FH1_CAPTURE_*` environment variables unset. Navigate to a reproducible
@@ -57,6 +58,11 @@ profiles explicitly turn wireframe, tracing and readbacks off, discard capture
 environment variables, and use warning-level logging. When attaching, the
 existing process's settings remain in effect and must be checked separately.
 Wireframe remains available as an opt-in diagnostic; its default is false.
+Instruments may take much longer to save a Metal trace than to record it.
+`--finalization-seconds` bounds setup/save overhead separately from the recording
+(default 300, range 15–900 seconds). Failed or interrupted saves must not be
+treated as valid measurements; metadata records failures, and a successful
+TOC export sets `trace_validated`.
 
 Each recording directory contains `profile.trace`, runtime/profiler logs,
 `metadata.json`, `trace-toc.xml` and `cpu.jsonl`. Metadata includes the scene
@@ -135,6 +141,39 @@ and Metal execution samples available only in the final approximately
 0.52 seconds. This is too short to rank GPU passes or measure sustained frame
 rate. Use a longer combined recording or Metal System Trace next, and inspect
 the actual sample interval rather than assuming it equals the requested limit.
+
+A later Metal System Trace attaches only after the user confirms the loaded
+3D scene. Wireframe, draw tracing, shader/target dumps and draw-input capture
+are disabled. A 30-second attempt exceeds the previous 90-second save timeout
+and leaves an unreadable trace; it is excluded from the analysis. The shorter
+five-second retry saves successfully with a longer finalization allowance.
+Its recorded duration is 6.13 seconds, with FH1 GPU activity available across
+5.48 seconds. The thermal track remains Nominal during this short recording.
+
+GPU intervals are filtered to FH1's process, clipped to the usable window and
+merged per channel, including nested intervals without double-counting:
+
+| Confirmed 3D GPU activity | Active interval union | Share of usable window |
+| --- | ---: | ---: |
+| Fragment | 4.59 s | 83.8% |
+| Vertex | 0.30 s | 5.5% |
+| Compute | 0.17 s | 3.0% |
+| Any FH1 GPU channel | 5.00 s | 91.3% |
+
+Channels overlap, so their percentages must not be added. These are recorded
+active intervals, not shader counter utilization or an uninstrumented FPS
+measurement. Shader timeline/counters are disabled in this template. Generic
+render-encoder labels do not identify the expensive material or shader.
+The trace also records 93 waits for the next drawable, totaling 2.40 seconds
+on their thread; these waits overlap GPU execution and other host work.
+
+The useful next rendering target is pixel shading and render-pass structure,
+including the emulated target/resolve path. Vertex processing occupies a much
+smaller interval share. A captured vertex-program replay now verifies position
+and six interpolators before moving to original pixel shaders, textures and
+indexed rasterization; see [native-renderer.md](native-renderer.md). Neither
+successful shader compilation nor a vertex-only replay demonstrates the
+expected native renderer speedup.
 
 Inspect steady frames separately from shader compilation and level loading.
 Use Time Profiler's running-thread samples to identify expensive guest
