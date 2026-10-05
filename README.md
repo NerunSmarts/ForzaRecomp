@@ -101,8 +101,8 @@ before committing or publishing. A compiled game binary contains translated
 game instructions and is a private build artifact too.
 
 [docs/architecture.md](docs/architecture.md) explains the module design and
-runtime patches. [docs/rendering.md](docs/rendering.md) records the missing-world
-investigation and opt-in wireframe diagnostics.
+runtime patches. [docs/rendering.md](docs/rendering.md) records the world-composite
+fix, remaining rendering artifacts and opt-in diagnostics.
 [docs/ios-port.md](docs/ios-port.md) describes the remaining
 iOS work. There is no validated iOS build target yet.
 The planned first-launch disc installer is described in

@@ -135,9 +135,21 @@ apply to this SDK revision or ARM64 target.
 
 `patches/0012-add-opt-in-vulkan-world-diagnostics.patch` adds mesh-only untextured
 wireframe rendering, sampled draw tracing, and translated shader dumps. These
-controls are off by default and do not fix the missing world. The diagnostic
+controls are off by default. The diagnostic
 state, limitations, and renderer rewrite options are described in
 [rendering.md](rendering.md).
+
+`patches/0013-fix-rectangle-shader-restarts.patch` fixes program-counter control
+flow when rectangle-list expansion reruns a vertex shader that contains
+branches. The missing restart predecessor prevented the world composite from
+rendering on macOS. The corrected instruction includes every incoming path.
+
+`patches/0014-synchronize-shared-memory-compute-writes.patch` includes shader
+write access for compute writes to shared GPU memory, including resolves.
+`patches/0015-capture-world-rendering-stages.patch` adds one-frame asynchronous
+readbacks of host targets, EDRAM, resolved guest memory and reloaded textures.
+Captures are disabled by default and stay private. The successful world
+rendering check and remaining artifacts are documented in [rendering.md](rendering.md).
 
 The project's publication policy permits generated C++ and headers alongside
 configuration, tooling, runtime patches, and documentation. These files are

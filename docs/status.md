@@ -2,8 +2,9 @@ Validated on Apple Silicon macOS on 2026-10-03 with ReXGlue 0.10.0 at
 `c94f5ebdcb3c9d1a460ca48e04f9758448f8d518` and eleven local SDK patches.
 This is a working native boot and presentation bring-up. Full gameplay and an
 iOS build remain unverified.
-An additional opt-in graphics diagnostic patch was added on 2026-10-04;
-its trials and limitations are recorded in [rendering.md](rendering.md).
+Graphics work through 2026-10-05 adds four further patches, including the
+rectangle-shader control-flow correction that restores the visible 3D scene.
+The findings and remaining artifacts are recorded in [rendering.md](rendering.md).
 
 | Check | Result |
 | --- | --- |
@@ -20,7 +21,9 @@ its trials and limitations are recorded in [rendering.md](rendering.md).
 | Menu CPU comparison | Early playback snapshots: approximately 213% before worker backoff, 167% after |
 | Menu thermals | User reports slower onset of throttling after presenter caching and worker backoff; throttling persists |
 | World loading and input | Passes the earlier missing callbacks; driving HUD and throttle response observed |
-| World geometry | Road and car remain missing; full gameplay is not established |
+| World rendering | Textured terrain, upright trees and cars appear in display captures; user confirms visible 3D after rectangle-shader restart fix |
+| Rendering quality and performance | Surface artifacts remain; steady frame rate and complete gameplay unverified |
+| Branch-containing rectangle shaders | Missing SPIR-V restart predecessor reproduced, corrected, and absent in 437 dumped modules |
 | VMX arithmetic helpers | Fusion, signed zero, lane order, overflow, non-finite inputs and denormals pass |
 | ARM integer vector helpers | Full shift-count ranges, byte value/count pairs, permutation controls and mixed random lanes pass scalar references |
 | ARM-optimized playback | 50-second run passes; three successive frames differ; capture-free 10–35 s window averages approximately 149% CPU |
@@ -55,7 +58,7 @@ sampler, and delays framebuffer readback until 40 seconds. It is a short
 functional and CPU check, with no controlled temperature or clock measurement.
 Longer thermal behavior after the integer-vector changes remains unverified.
 
-Remaining validation covers complete world rendering, driving, collision,
+Remaining validation covers rendering artifacts, steady frame rate, driving, collision,
 saves, facade unload during real guest execution, and extended runtime
 stability. ReXGlue still reports unimplemented kernel exports and MoltenVK
 primitive-restart warnings; a surviving process does not establish correct

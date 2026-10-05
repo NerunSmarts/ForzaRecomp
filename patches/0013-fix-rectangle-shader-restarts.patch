@@ -1,0 +1,72 @@
+diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -676,29 +676,9 @@
+       builder_->createBranch(main_loop_merge_);
+     }
+ 
+-    // Main loop continuation - choose the program counter based on the path
+-    // taken (-1 if not from a jump as a safe fallback, which would result in
+-    // not hitting any switch case and reaching the final break in the body).
++    // Reserve the continuation's block order, but build its instructions after
++    // rectangle expansion has added the next-vertex restart predecessor.
+     function_main_->addBlock(main_loop_continue_);
+-    builder_->setBuildPoint(main_loop_continue_);
+-    if (has_main_switch) {
+-      // OpPhi, if added, must be the first in the block.
+-      // If labels were added, but not jumps (for example, due to the call
+-      // instruction not being implemented as of October 18, 2020), send an
+-      // impossible program counter value (-1) to the OpPhi at the next
+-      // iteration.
+-      if (main_switch_next_pc_phi_operands_.empty()) {
+-        main_switch_next_pc_phi_operands_.push_back(builder_->makeIntConstant(-1));
+-      }
+-      std::unique_ptr<spv::Instruction> main_loop_pc_next_op = std::make_unique<spv::Instruction>(
+-          main_loop_pc_next_, type_int_,
+-          main_switch_next_pc_phi_operands_.size() >= 2 ? spv::OpPhi : spv::OpCopyObject);
+-      for (spv::Id operand : main_switch_next_pc_phi_operands_) {
+-        main_loop_pc_next_op->addIdOperand(operand);
+-      }
+-      builder_->getBuildPoint()->addInstruction(std::move(main_loop_pc_next_op));
+-    }
+-    builder_->createBranch(main_loop_header_);
+ 
+     // Add the main loop merge block and go back to the function.
+     function_main_->addBlock(main_loop_merge_);
+@@ -1129,6 +1109,36 @@
+       }
+       if_not_last_guest_vertex.makeEndIf();
+     }
++    // Rectangle expansion can add a program-counter restart to this loop.
++    // Include every predecessor before emitting OpPhi (including PC 0 for
++    // the next guest vertex), or branch-containing rectangle shaders have
++    // invalid control flow and may produce degenerate output positions.
++    spv::Block* final_output_block = builder_->getBuildPoint();
++    // Main loop continuation - choose the program counter based on the path
++    // taken (-1 if not from a jump as a safe fallback, which would result in
++    // not hitting any switch case and reaching the final break in the body).
++    builder_->setBuildPoint(main_loop_continue_);
++    if (has_main_switch) {
++      // OpPhi, if added, must be the first in the block.
++      // If labels were added, but not jumps (for example, due to the call
++      // instruction not being implemented as of October 18, 2020), send an
++      // impossible program counter value (-1) to the OpPhi at the next
++      // iteration.
++      if (main_switch_next_pc_phi_operands_.empty()) {
++        main_switch_next_pc_phi_operands_.push_back(builder_->makeIntConstant(-1));
++      }
++      std::unique_ptr<spv::Instruction> main_loop_pc_next_op = std::make_unique<spv::Instruction>(
++          main_loop_pc_next_, type_int_,
++          main_switch_next_pc_phi_operands_.size() >= 2 ? spv::OpPhi : spv::OpCopyObject);
++      for (spv::Id operand : main_switch_next_pc_phi_operands_) {
++        main_loop_pc_next_op->addIdOperand(operand);
++      }
++      builder_->getBuildPoint()->addInstruction(std::move(main_loop_pc_next_op));
++    }
++    builder_->createBranch(main_loop_header_);
++
++    builder_->setBuildPoint(final_output_block);
++
+     if (main_loop_exit_ != main_loop_merge_) {
+       if (!builder_->getBuildPoint()->isTerminated()) {
+         builder_->createBranch(main_loop_exit_);
