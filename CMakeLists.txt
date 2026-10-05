@@ -39,6 +39,9 @@ target_link_libraries(fh1_vmx_smoke PRIVATE rex::runtime)
 add_executable(fh1_wait_smoke tools/wait_smoke.cpp)
 target_link_libraries(fh1_wait_smoke PRIVATE rex::runtime)
 
+# Synthetic host shader ABI checks; this target does not link the game/runtime.
+add_executable(fh1_vertex_fetch_smoke tools/vertex_fetch_smoke.cpp)
+
 if(TARGET fh1_recomp)
     add_executable(fh1_module_smoke tools/module_smoke.cpp)
     target_include_directories(fh1_module_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -89,12 +89,15 @@ mapped explicitly when correlating a runtime draw, not treated as interchangeabl
 ## Shader adapter prototype
 
 `scripts/bootstrap_shader_tools.py` clones the pinned MIT-licensed XenosRecomp
-revision, applies `patches/xenosrecomp/0001-fh1-shader-contract.patch`, builds an
+revision, applies the ordered patches in `config/shader_tools.json`, builds an
 assertions-enabled host compiler, and builds `spirv-val` from the existing SDK
 sources. It also supplies a small XXH3 library for correlating runtime shader
 hashes. The tools stay local and do not change the game runtime. This bootstrap
 currently supports Apple Silicon macOS; the shader inputs and Vulkan backend
 design are portable, but other host tool builds remain unvalidated.
+Patch replay validates overlapping hunks in a temporary copy before changing
+the dependency checkout. Fresh, partially applied and repeated series are
+tested; unrelated local changes are preserved.
 
 ```sh
 python3 scripts/bootstrap_shader_tools.py
@@ -110,20 +113,38 @@ case fails. It samples evenly across each asset family and shader stage; it
 does not infer which shaders dominate the actual gameplay frame.
 
 With the unmodified compiler, 10 of the initial 14 samples compiled and passed
-Vulkan SPIR-V validation. The FH1 adapter raises that to 13 of 14; the broader
-sample compiles and validates 38 of 40. The changes include a dense FH1 vertex
+Vulkan SPIR-V validation. The first FH1 adapter raised that to 13 of 14 and
+38 of 40. With buffer fetch support, all 40 now compile and validate. A sweep
+of **all 1,511 unique imported vertex programs** also compiles and passes
+Vulkan SPIR-V validation. The changes include a dense FH1 vertex
 input location table (including `NORMAL1`), decoded float normal inputs,
 separate vertex and pixel texture slots, and explicit-LOD vertex sampling.
 Vertex sampling includes the instruction bias and captured sampler bias;
 register LOD/gradient variants are rejected pending implementation.
 
-The two broader-sample failures are vertex buffer fetches without entries in
-the shader's declared mesh input table. One reads VF90, a buffer outside that
-table, with a packed format. Supporting it requires a captured buffer binding
-and the correct fetch conversion; assigning it a guessed mesh attribute or
-zeroing it would compile an incorrect shader. Those cases remain unsupported.
-Compilation and validation of the other programs do not prove their render
-output or complete texture/fetch semantics.
+The two original failures were buffer reads outside the declared mesh input
+table. The adapter now supports all 15 Xenos vertex formats, including the
+packed signed 11/11/10 vector and half4 fetches from VF90 and float4 matrix
+reads from VF89. Mini fetches reuse the previous full fetch's saved address
+and binding; their own index/stride/constant fields are ignored. Each full
+fetch saves its address before writing its destination, including when the
+index source aliases that destination. Predication controls those updates.
+The initial vertex register uses the original index with its 24-bit mask and
+draw-range clamp; native indexed submission must retain the guest base vertex
+and original index identity. Reindexing meshes needs an explicit index mapping.
+
+Of the imported vertex programs, 455 contain these extra reads: 296 use the
+packed VF90 and VF89 matrix paths, and 159 use half4 VF90, including 59 with
+a following mini fetch. Existing runtime dumps corroborate VF89/VF90 use in
+40 correlated vertex-program candidates. The dumps do not contain the buffer
+contents needed for an original-material native draw proof.
+
+Expanding the mixed sample to 72 yields 70 compilation/validation passes.
+Both remaining failures are pixel shaders referencing `b133`: their boolean
+control-flow addresses still need reconciliation with the reflected register
+bank. This sweep does not cover all 1,407 unique pixel programs. Successful
+compilation does not establish complete control-flow, texture or material
+parity, and cannot by itself authorize bypassing a guest pass.
 
 The prototype shader contract assigns inputs as follows:
 
@@ -141,11 +162,60 @@ The shared constant buffer has 32 slots per descriptor table: pixel slots
 0–15 and vertex slots 16–31. Three texture-index tables occupy bytes 0–383,
 sampler indices 384–511, and sampler LOD biases 512–639. Boolean bits start at
 640, UV swaps at 644, half-pixel offset at 648 and alpha threshold at 656.
+Vertex-index min/max occupy 660/664; byte 668 is reserved. The 96 vertex-buffer
+bindings start at byte 672, with a 16-byte record containing a 64-bit host
+device address, DWORD count and endian mode. The shared block totals 2,208
+bytes. `src/graphics/shader_contract.h` asserts that layout and provides
+binding preflight: fetch type, owned allocation extent, generation presence,
+alignment, interior-address rebasing and overflow checks. The uploader must
+resolve the current generation and retain its allocation through the GPU fence;
+the numeric record alone does not establish residency or lifetime.
 Vertex/pixel float banks remain separate buffer addresses. This contract still
 needs a runtime uploader and checks against captured bindings; the game does
 not currently use it. Buffer device addresses and unbounded descriptor arrays
 in the prototype also need feature checks or an alternative binding path for
 devices that cannot support them.
+
+Buffer indexing floors the source, optionally after adding 0.5, then multiplies
+by DWORD stride and adds the signed DWORD offset. Wide address arithmetic
+prevents wrapping a large or negative index into unrelated data. Per-word
+bounds checks protect native GPU memory; zero for an invalid binding or an
+out-of-range word is a safety behavior, not established Xbox hardware behavior.
+Native frame preflight must reject missing/invalid resources rather than rely
+on that safety value to approximate a material. Endian conversion precedes
+format unpacking, and exponent adjustment precedes destination swizzling.
+Zero/One writes and Keep components remain independent of exponent adjustment.
+Half conversion matches the current Xenos fallback's IEEE behavior; its
+known difference from the hardware's extended exponent-31 range remains.
+
+`tools/validate_vertex_fetch.py` compiles an independent scalar oracle and
+the actual patched HLSL helpers. The offscreen Vulkan compute harness binds
+owned buffers, submits once, waits for completion and compares **4,013
+synthetic cases**. It passes on the Apple M2 with the bundled MoltenVK, including
+all formats/endian modes, signed/unsigned and normalized/integer conversion,
+half subnormals, index rounding, offsets, mini address reuse, predication,
+swizzles, exponents, word boundaries and vertex-index mask/clamp. This is a
+correctness check without a game run or performance recording. It queries
+buffer-device-address and shaderInt64 support; the portable fallback binding
+path and physical iOS device remain unvalidated. The optional DXIL descriptor
+branch is not a validated backend.
+
+```sh
+# Host ABI/preflight and scalar goldens; no GPU needed.
+python3 tools/validate_vertex_fetch.py --output out/native-renderer/fetch-cpu
+# Synthetic MoltenVK correctness validation, without launching FH1.
+python3 tools/validate_vertex_fetch.py --gpu --output out/native-renderer/fetch-gpu
+# Compile and validate every imported vertex program.
+python3 tools/probe_fh1_shader_translation.py \
+  out/native-renderer/shaders/manifest.json \
+  --tools .tools/fh1-shaders/tools.json --all-vertex \
+  --output out/native-renderer/all-vertex
+```
+
+All validation outputs remain ignored. Output directories must be new and
+beneath `out/`. `--gpu --build-only` prepares the offscreen test for execution
+in an environment with Metal access. The regular CMake target
+`fh1_vertex_fetch_smoke` also exercises the host contract without linking FH1.
 
 To correlate an existing diagnostic log without collecting a new recording:
 
@@ -175,6 +245,16 @@ retaining the opcode, registers, index swizzle, predicates and all other code.
 It verifies each dump's raw runtime hash first. It lists every candidate instead
 of selecting an ambiguous effect and does not replace runtime cache keys.
 Programs outside the declared input table and bindings still need investigation.
+Supplying `--shader-contracts` with a probe report additionally verifies full
+and mini fetch relationships and reports native-to-guest buffer slot mappings.
+Only the full fetch's slot bits are normalized; format, offsets, stride,
+rounding, predicates and executable code stay significant. Inherited stride
+changes and conflicting mappings of one native slot to multiple guest buffers
+are rejected. All 40 buffer candidates in the existing recordings retain
+VF89/VF90 unchanged; this adds binding evidence without increasing the 134
+total matched/candidate program hashes. These mappings remain diagnostic
+candidates and do not establish the underlying resources or their lifetime.
+
 RTTI in the mapped image names `CGraphicsStreamDeferred` and its indexed draw
 parameter types. Static review links its vtable at `0x820213DC` to indexed draw
 enqueue functions `sub_82588110` (three arguments, 16-byte parameter record)
@@ -253,6 +333,22 @@ resolve/reload cycles. Preserve original material shading, exposure, tone
 mapping, shadows, transparency, reflections and UI blending before adding
 optional effects. Rendering a different generic material is not parity.
 
+Keep internal 3D render size, presentation size and camera aspect ratio distinct
+in the pass graph. Resolution scaling should resize the relevant targets and
+their viewport-dependent constants while composing the HUD at its intended
+size. Additional aspect ratios need camera/projection changes and HUD layout
+validation. Preserve original index identity and packed data where native GPU
+conversion avoids repeating CPU work; prepare shaders, declarations and stable
+assets during import or resource creation rather than per frame.
+
+Leave an explicit stage between 3D rendering and HUD composition for optional
+spatial or temporal upscaling. Temporal upscalers need verified depth, motion
+vectors, jitter, exposure and history reset on cuts or resolution changes.
+Those inputs must be reconstructed accurately before enabling such a path.
+These features are design goals; no scaling, aspect-ratio option or upscaler
+has been installed in the game. Original shading and sustained performance
+remain the first priorities.
+
 First render one original opaque world pass offscreen at the original size.
 Compare it with the current Xenos capture, including vertex layout, constants,
 depth and texture bindings. Add car materials and their dynamic transforms
@@ -287,11 +383,11 @@ prototype visible.
 
 ## Next milestones
 
-1. Adapt shader translation to FH1's input semantics and register/binding
-   contract, starting from the validated prototype. Implement undeclared
-   buffer fetches and assess all required programs, then validate MoltenVK
-   execution. Correlate runtime microcode hashes to imported programs and
-   identify uncovered shaders.
+1. Finish shader parity beyond the now validated vertex programs and buffer
+   helpers: reconcile pixel boolean banks, assess required pixel programs,
+   and verify full material execution against captured draw state. Resolve
+   unmatched runtime shaders and validate actual VF89/VF90 buffer contents,
+   index identity, constants and texture bindings.
 2. Add observer hooks for verified device, resource and draw operations.
    Reconstruct one frame's pass graph and resource ownership without changing
    its output. Validate streaming/unload lifetimes and draw-time constants.

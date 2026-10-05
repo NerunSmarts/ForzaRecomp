@@ -12,6 +12,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.dependency_patches import apply_patch_series
 
 
 def run(*args, cwd=ROOT):
@@ -38,13 +40,7 @@ def main():
     if current != revision:
         raise RuntimeError(f"Shader translator must be at {revision}; found {current}")
     run("git", "submodule", "update", "--init", "--depth", "1", "--jobs", "4", cwd=source)
-    for name in config["patches"]:
-        patch = ROOT / name
-        reverse = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)], cwd=source,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if reverse.returncode:
-            run("git", "apply", "--check", str(patch), cwd=source)
-            run("git", "apply", str(patch), cwd=source)
+    apply_patch_series(source, [ROOT / name for name in config["patches"]])
     build = ROOT / "out/build/xenosrecomp"
     # Assertions report unsupported translation cases instead of generating
     # invalid output. This host tool's speed is not gameplay performance.

@@ -127,8 +127,11 @@ Skate 3 demonstrates that a native renderer can perform well with MoltenVK;
 its reported multiplier is not an FH1 prediction.
 
 The implemented first stage imports all 174 local effect files and tests an
-FH1 adaptation of XenosRecomp. In a 40-program sample, 38 compile and pass
-Vulkan SPIR-V validation; two require undeclared vertex buffer fetch support.
+FH1 adaptation of XenosRecomp. Buffer fetch support now allows all 1,511
+imported vertex programs to compile and pass Vulkan SPIR-V validation. An
+offscreen MoltenVK check passes 4,013 synthetic cases across all 15 vertex
+formats and address/conversion controls. The expanded mixed shader sample
+passes 70/72, with two pixel boolean-register failures still to resolve.
 The game still uses the existing renderer. Native world passes, UI composition,
 resource lifetimes and a measured performance gain remain to be implemented.
 The architecture, commands, source references and next milestones are in

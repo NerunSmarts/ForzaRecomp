@@ -38,7 +38,63 @@ def normalize_vertex_layout(code, addresses):
     return bytes(result)
 
 
-def correlate(manifest_path, log, library, shader_dumps=None):
+def normalize_buffer_slots(code, addresses):
+    """Mask only the full fetch's constant slot; retain format/addressing/code."""
+    result = bytearray(code)
+    for address in addresses:
+        offset = address * 12
+        if offset < 0 or offset + 12 > len(result):
+            raise ValueError("Buffer fetch exceeds microcode")
+        a, b, _ = struct.unpack_from(">3I", result, offset)
+        if a & 31 or b & (1 << 30):
+            raise ValueError("Buffer binding must identify a full vertex fetch")
+        struct.pack_into(">I", result, offset, a & ~0x07F00000)
+    return bytes(result)
+
+
+def buffer_binding_map(imported, runtime, fetches):
+    """Verify the translator contract and report consistent native/guest slots.
+
+    Slot aliases are diagnostic evidence. The caller still needs the actual
+    draw-time buffers, ownership, constants and declaration conversion.
+    """
+    if len(imported) != len(runtime):
+        raise ValueError("Buffer variant microcode lengths differ")
+    mappings = {}
+    for fetch in fetches:
+        address, full = fetch["address"], fetch["full"]
+        if min(address, full) < 0 or max(address, full) * 12 + 12 > len(imported):
+            raise ValueError("Fetch contract exceeds microcode")
+        a, b, c = struct.unpack_from(">3I", imported, address * 12)
+        fa, fb, fc = struct.unpack_from(">3I", imported, full * 12)
+        ra, rb, rc = struct.unpack_from(">3I", runtime, full * 12)
+        slot = ((fa >> 20) & 31) * 3 + ((fa >> 25) & 3)
+        guest_slot = ((ra >> 20) & 31) * 3 + ((ra >> 25) & 3)
+        offset = (c >> 8) & 0x7FFFFF
+        if offset & 0x400000:
+            offset -= 0x800000
+        if (a & 31 or fa & 31 or ra & 31 or fb & (1 << 30) or rb & (1 << 30) or
+            slot != fetch["slot"] or slot >= 96 or guest_slot >= 96 or
+            ((b >> 16) & 63) != fetch["format"] or offset != fetch["offset"] or
+            ((b >> 30) & 1) != fetch["mini"] or (fc & 255) != fetch["stride"]):
+            raise ValueError("Fetch contract does not match imported microcode")
+        # A mini outside the mesh declaration can inherit its full fetch's
+        # layout. Such a dependency cannot tolerate a changed stride/rounding.
+        if (fc & 255) != (rc & 255) or (fb & 0x8000) != (rb & 0x8000):
+            raise ValueError("Buffer index addressing changed in runtime variant")
+        if slot in mappings and mappings[slot]["guest_slot"] != guest_slot:
+            raise ValueError("One native buffer slot maps to conflicting guest slots")
+        entry = mappings.setdefault(slot, {"native_slot": slot, "guest_slot": guest_slot,
+                                           "full_addresses": [], "fetch_addresses": []})
+        entry["full_addresses"].append(full)
+        entry["fetch_addresses"].append(address)
+    for entry in mappings.values():
+        for field in ("full_addresses", "fetch_addresses"):
+            entry[field] = sorted(set(entry[field]))
+    return [mappings[slot] for slot in sorted(mappings)]
+
+
+def correlate(manifest_path, log, library, shader_dumps=None, shader_contracts=None):
     manifest_path = Path(manifest_path).resolve()
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema") != 1 or manifest.get("kind") != "fh1-fxlite-inventory":
@@ -54,6 +110,14 @@ def correlate(manifest_path, log, library, shader_dumps=None):
     by_hash = defaultdict(list)
     variants = defaultdict(list)
     layouts_by_size = defaultdict(set)
+    contracts, vertex_codes = {}, {}
+    if shader_contracts:
+        report = json.loads(Path(shader_contracts).read_text())
+        if report.get("schema") != 1 or report.get("kind") != "fh1-shader-compatibility-probe":
+            raise ValueError("Expected a shader translation probe report")
+        for row in report["results"]:
+            if row["stage"] == "vertex" and row["translation"]["status"] == "pass" and row.get("buffer_fetches"):
+                contracts[row["sha256"]] = row["buffer_fetches"]
     for digest, program in manifest["programs"].items():
         if "file" not in program:
             raise ValueError("Import needs --extract before runtime hashes can be correlated")
@@ -71,6 +135,7 @@ def correlate(manifest_path, log, library, shader_dumps=None):
         entry = {"sha256": digest, "effects": sorted(program_sources[digest]), "match": "exact"}
         by_hash[key].append(entry)
         if shader_dumps and program["stage"] == "vertex":
+            vertex_codes[digest] = code
             addresses = tuple(sorted({p["instruction_address"]
                                       for p in program["interface"]["vertex_inputs"]}))
             if addresses:
@@ -78,9 +143,17 @@ def correlate(manifest_path, log, library, shader_dumps=None):
                     normalized = normalize_vertex_layout(code, addresses)
                 except ValueError:
                     continue
-                key = (len(code), addresses, hashlib.sha256(normalized).hexdigest())
+                key = (len(code), addresses, (), hashlib.sha256(normalized).hexdigest())
                 variants[key].append(dict(entry, match="vertex-layout-candidate"))
-                layouts_by_size[len(code)].add(addresses)
+                layouts_by_size[len(code)].add((addresses, ()))
+            if digest in contracts:
+                fetches = contracts[digest]
+                buffer_binding_map(code, code, fetches)
+                full_addresses = tuple(sorted({f["full"] for f in fetches}))
+                normalized = normalize_buffer_slots(normalize_vertex_layout(code, addresses), full_addresses)
+                key = (len(code), addresses, full_addresses, hashlib.sha256(normalized).hexdigest())
+                variants[key].append(dict(entry, match="vertex-buffer-binding-candidate"))
+                layouts_by_size[len(code)].add((addresses, full_addresses))
     counts = Counter()
     frames = set()
     stages = Counter()
@@ -115,13 +188,22 @@ def correlate(manifest_path, log, library, shader_dumps=None):
             if f"{xxh3(ctypes.create_string_buffer(code), len(code)):016X}" != digest:
                 raise ValueError(f"Shader dump hash mismatch: {path.name}")
             candidates = []
-            for addresses in sorted(layouts_by_size[len(code)]):
+            for addresses, full_addresses in sorted(layouts_by_size[len(code)]):
                 try:
                     normalized = normalize_vertex_layout(code, addresses)
+                    normalized = normalize_buffer_slots(normalized, full_addresses)
                 except ValueError:
                     continue
-                key = (len(code), addresses, hashlib.sha256(normalized).hexdigest())
-                candidates.extend(variants.get(key, []))
+                key = (len(code), addresses, full_addresses, hashlib.sha256(normalized).hexdigest())
+                for entry in variants.get(key, []):
+                    if full_addresses:
+                        try:
+                            mapping = buffer_binding_map(vertex_codes[entry["sha256"]], code, contracts[entry["sha256"]])
+                        except ValueError:
+                            continue
+                        candidates.append(dict(entry, buffer_bindings=mapping))
+                    else:
+                        candidates.append(entry)
             if candidates:
                 by_hash[("vertex", digest)] = candidates
     programs = []
@@ -133,6 +215,7 @@ def correlate(manifest_path, log, library, shader_dumps=None):
                "matched_programs": sum(bool(p["matches"]) for p in programs),
                "exact_matches": sum(any(m["match"] == "exact" for m in p["matches"]) for p in programs),
                "vertex_layout_candidates": sum(any(m["match"] == "vertex-layout-candidate" for m in p["matches"]) for p in programs),
+               "vertex_buffer_candidates": sum(any(m["match"] == "vertex-buffer-binding-candidate" for m in p["matches"]) for p in programs),
                "unmatched_programs": sum(not p["matches"] for p in programs)}
     return {"schema": 1, "kind": "fh1-draw-shader-correlation", "summary": summary,
             "limits": ["Only the frames and capped/sampled draw rows present in this log.",
@@ -147,13 +230,16 @@ def main():
     parser.add_argument("log", type=Path)
     parser.add_argument("--tools", type=Path, default=ROOT / ".tools/fh1-shaders/tools.json")
     parser.add_argument("--shader-dumps", type=Path, help="Existing SDK microcode dump directory for vertex-layout candidate matching")
+    parser.add_argument("--shader-contracts", type=Path, help="Probe report with buffer-fetch contracts for diagnosing patched fetch slots")
     parser.add_argument("--output", type=Path, default=ROOT / "out/native-renderer/draw-shaders")
     args = parser.parse_args()
     try:
         config = json.loads(args.tools.read_text())
         if config.get("schema") != 1:
             raise ValueError("Unsupported shader tools configuration")
-        report = correlate(args.manifest, args.log, config["hash_library"], args.shader_dumps)
+        if args.shader_contracts and not args.shader_dumps:
+            raise ValueError("--shader-contracts requires --shader-dumps")
+        report = correlate(args.manifest, args.log, config["hash_library"], args.shader_dumps, args.shader_contracts)
         output = new_output_directory(args.output)
         (output / "draw-shaders.json").write_text(json.dumps(report, indent=2) + "\n")
     except (OSError, ValueError, KeyError) as error:

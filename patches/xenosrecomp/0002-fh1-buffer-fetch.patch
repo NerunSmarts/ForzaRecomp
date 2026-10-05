@@ -1,0 +1,332 @@
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -32,6 +32,8 @@
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 644)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 648)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 656)
++#define g_Fh1VertexIndexMin        vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 660)
++#define g_Fh1VertexIndexMax        vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 664)
+ #else
+ #define g_Booleans                 vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 256)
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+@@ -51,7 +53,10 @@
+     uint g_Booleans : packoffset(c40.x); \
+     uint g_SwappedTexcoords : packoffset(c40.y); \
+     float2 g_HalfPixelOffset : packoffset(c40.z); \
+-    float g_AlphaThreshold : packoffset(c41.x);
++    float g_AlphaThreshold : packoffset(c41.x); \
++    uint g_Fh1VertexIndexMin : packoffset(c41.y); \
++    uint g_Fh1VertexIndexMax : packoffset(c41.z); \
++    uint4 g_Fh1VertexFetchBindings[96] : packoffset(c42);
+ #define g_Fh1SamplerLodBias(SLOT) g_Fh1SamplerLodBiasValues[(SLOT) / 4][(SLOT) % 4]
+ #else
+ #define DEFINE_SHARED_CONSTANTS() \
+@@ -63,6 +68,158 @@
+ 
+ uint g_SpecConstants();
+ 
++#endif
++
++#ifdef FH1_RECOMP
++#ifdef __spirv__
++float fh1InitialVertexIndex(uint index)
++{
++    // Native index submission retains the guest base vertex in SV_VertexID.
++    return float(clamp(index & 0xFFFFFF, g_Fh1VertexIndexMin, g_Fh1VertexIndexMax));
++}
++#else
++float fh1InitialVertexIndex(uint index);
++#endif
++#endif
++
++// FH1 buffer fetch ABI: uint64 device address, uint word count, uint endian,
++// starting at byte 672 of SharedConstants. Host validation owns the allocation
++// and rejects invalid bindings before choosing the native frame path.
++#ifdef FH1_RECOMP
++#ifndef __spirv__
++ByteAddressBuffer g_Fh1VertexBufferHeap[] : register(t0, space5);
++#endif
++
++#ifdef __spirv__
++uint4 fh1VertexFetchBinding(uint slot)
++{
++    return vk::RawBufferLoad<uint4>(g_PushConstants.SharedConstants + 672 + slot * 16, 16);
++}
++#else
++// Defined after the generated constant buffer. DXIL uses a descriptor index
++// in .x instead of a device address. This path is not runtime-validated.
++uint4 fh1VertexFetchBinding(uint slot);
++#endif
++
++uint fh1VertexFetchWord(uint4 binding, int64_t word)
++{
++    // Zero is a safety result for each out-of-range word, not a substitute for
++    // native preflight. Only in-range accesses have established Xenos parity.
++    if (word < 0 || word >= int64_t(binding.z))
++        return 0;
++#ifdef __spirv__
++    uint64_t address = uint64_t(binding.x) | (uint64_t(binding.y) << 32);
++    uint value = vk::RawBufferLoad<uint>(address + uint64_t(word) * 4, 4);
++#else
++    uint value = g_Fh1VertexBufferHeap[binding.x].Load(uint(word) * 4);
++#endif
++    // Endian is the fetch constant's word 1 bits 0:1, not host CPU endian.
++    if (binding.w == 1)
++        return ((value << 8) & 0xFF00FF00) | ((value >> 8) & 0x00FF00FF);
++    if (binding.w == 2)
++        return ((value << 24) | ((value << 8) & 0x00FF0000) |
++                ((value >> 8) & 0x0000FF00) | (value >> 24));
++    if (binding.w == 3)
++        return (value << 16) | (value >> 16);
++    return value;
++}
++
++float fh1PackedComponent(uint word, uint shift, uint width,
++                         bool isSigned, bool isInteger, bool noZero)
++{
++    uint mask = (1u << width) - 1;
++    uint bits = (word >> shift) & mask;
++    // Arithmetic shift sign-extends without relying on unsigned subtraction.
++    float value = isSigned ? float(asint(bits << (32 - width)) >> (32 - width)) : float(bits);
++    if (isInteger)
++        return value;
++    if (!isSigned)
++        return value * (1.0 / float(mask));
++    precise float scale = 1.0 / (float((1u << (width - 1)) - 1) + (noZero ? 0.5 : 0.0));
++    precise float normalized = value * scale;
++    if (noZero)
++        return normalized + 0.5 * scale;
++    return max(normalized, -1.0);
++}
++
++float fh1Integer32(uint bits, bool isSigned, bool isInteger, bool noZero)
++{
++    float value = isSigned ? float(asint(bits)) : float(bits);
++    if (isInteger)
++        return value;
++    if (!isSigned)
++        return value * (1.0 / 4294967295.0);
++    precise float normalized = value * (1.0 / 2147483647.0);
++    // The no-zero denominator also rounds to 2^31 in float32, as in Xenos.
++    return noZero ? normalized + (0.5 / 2147483647.5) : normalized;
++}
++
++int64_t fh1VertexFetchAddress(float index, uint stride, bool roundIndex)
++{
++    if (!stride)
++        return 0;
++    // floor(x + .5), not round-to-even. With zero stride no index is read.
++    precise float adjusted = index + (roundIndex ? 0.5 : 0.0);
++    float floored = floor(adjusted);
++    if (!isfinite(floored) || floored < -2147483648.0 || floored >= 2147483648.0)
++        return -549755813888ll; // Invalid sentinel remains negative after any instruction offset.
++    return int64_t(int(floored)) * int64_t(stride);
++}
++
++float4 fh1VertexFetch(uint slot, int64_t address, int offset, uint format,
++                      bool isSigned, bool isInteger, bool noZero, int expAdjust)
++{
++    uint4 binding = fh1VertexFetchBinding(slot);
++    if (!binding.z || binding.z > 0xFFFFFF || binding.w > 3 || address == -549755813888ll)
++        return 0.0;
++#ifdef __spirv__
++    if (!(binding.x | binding.y) || (binding.x & 3))
++        return 0.0;
++#endif
++    // Wide arithmetic prevents a huge/negative index wrapping into data.
++    int64_t word = address + int64_t(offset);
++    float4 result = 0.0;
++    uint lo = fh1VertexFetchWord(binding, word);
++    if (format == 6 || format == 7 || format == 16 || format == 17 || format == 25 || format == 26)
++    {
++        uint4 widths = 0, shifts = 0;
++        if (format == 6) { widths = 8; shifts = uint4(0, 8, 16, 24); }
++        if (format == 7) { widths = uint4(10, 10, 10, 2); shifts = uint4(0, 10, 20, 30); }
++        // Xenos format names are ordered high-to-low, unlike vector components.
++        if (format == 16) { widths = uint4(11, 11, 10, 0); shifts = uint4(0, 11, 22, 0); }
++        if (format == 17) { widths = uint4(10, 11, 11, 0); shifts = uint4(0, 10, 21, 0); }
++        if (format == 25) { widths = uint4(16, 16, 0, 0); shifts = uint4(0, 16, 0, 0); }
++        if (format == 26) { widths = 16; shifts = uint4(0, 16, 0, 16); }
++        uint hi = format == 26 ? fh1VertexFetchWord(binding, word + 1) : lo;
++        [unroll] for (uint i = 0; i < 4; ++i)
++            if (widths[i])
++                result[i] = fh1PackedComponent(i < 2 ? lo : hi, shifts[i], widths[i], isSigned, isInteger, noZero);
++    }
++    else if (format == 31 || format == 32)
++    {
++        result.xy = float2(f16tof32(lo & 0xFFFF), f16tof32(lo >> 16));
++        if (format == 32)
++        {
++            uint hi = fh1VertexFetchWord(binding, word + 1);
++            result.zw = float2(f16tof32(hi & 0xFFFF), f16tof32(hi >> 16));
++        }
++        // Like the current Xenos SPIR-V path, IEEE half is used here. Xenos's
++        // extended exponent-31 range is not reproduced by that fallback.
++    }
++    else // Host/compiler validation restricts this to the supported 32-bit formats.
++    {
++        uint count = (format == 33 || format == 36) ? 1 :
++                     (format == 34 || format == 37) ? 2 : format == 57 ? 3 : 4;
++        bool integerFormat = format == 33 || format == 34 || format == 35;
++        [unroll] for (uint i = 0; i < 4; ++i)
++            if (i < count)
++            {
++                uint bits = i == 0 ? lo : fh1VertexFetchWord(binding, word + i);
++                result[i] = integerFormat ? fh1Integer32(bits, isSigned, isInteger, noZero) : asfloat(bits);
++            }
++    }
++    return result * exp2(float(expAdjust));
++}
+ #endif
+ 
+ Texture2D<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -183,6 +183,15 @@
+ 
+ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t address)
+ {
++#ifdef FH1_RECOMP
++    if (!instr.isMiniFetch)
++    {
++        fh1FullFetchSlot = uint32_t(instr.constIndex) * 3 + uint32_t(instr.constIndexSelect);
++        fh1FullFetchStride = uint32_t(instr.stride);
++        fh1FullFetchAddress = address;
++    }
++#endif
++
+     if (instr.isPredicated)
+     {
+         indent();
+@@ -192,6 +201,69 @@
+         out += "{\n";
+         ++indentation;
+     }
++
++#ifdef FH1_RECOMP
++    if (!instr.isMiniFetch)
++    {
++        if (instr.srcRegisterAm || instr.srcRegister >= 32)
++        {
++            fprintf(stderr, "Unsupported FH1 full fetch index addressing at address=%u\n", address);
++            abort();
++        }
++        // Save before writing any destination, including a source/dest alias.
++        indent();
++        println("fh1VFetchAddress = fh1VertexFetchAddress(r{}.{}, {}, {});",
++            uint32_t(instr.srcRegister), SWIZZLES[instr.srcSwizzle], uint32_t(instr.stride), uint32_t(instr.isIndexRounded));
++    }
++    if (vertexElements.find(address) == vertexElements.end())
++    {
++        const uint32_t slot = fh1FullFetchSlot;
++        if (isPixelShader || slot >= 96 || instr.dstRegisterAam ||
++            instr.dstRegister >= 32 ||
++            (instr.format != 6 && instr.format != 7 && instr.format != 16 && instr.format != 17 &&
++             instr.format != 25 && instr.format != 26 && instr.format != 31 && instr.format != 32 &&
++             instr.format != 33 && instr.format != 34 && instr.format != 35 && instr.format != 36 &&
++             instr.format != 37 && instr.format != 38 && instr.format != 57))
++        {
++            fprintf(stderr, "Unsupported FH1 buffer fetch: address=%u slot=%u format=%u mini=%u srcRelative=%u dstRelative=%u\n",
++                address, slot, uint32_t(instr.format), uint32_t(instr.isMiniFetch), uint32_t(instr.srcRegisterAm), uint32_t(instr.dstRegisterAam));
++            abort();
++        }
++        bool hasComponents = false;
++        for (uint32_t i = 0; i < 4; ++i)
++        {
++            const auto swizzle = getDestSwizzle(instr.dstSwizzle, i);
++            if (uint32_t(swizzle) == 6)
++            {
++                fprintf(stderr, "Unsupported FH1 buffer fetch swizzle at address=%u\n", address);
++                abort();
++            }
++            hasComponents |= uint32_t(swizzle) <= 3;
++        }
++        indent();
++        println("// FH1_BUFFER_FETCH slot={} format={} stride={} offset={} address={} mini={} full={}",
++            slot, uint32_t(instr.format), fh1FullFetchStride, int32_t(instr.offset), address, uint32_t(instr.isMiniFetch), fh1FullFetchAddress);
++        if (hasComponents)
++        {
++            indent();
++            print("r{}.", instr.dstRegister);
++            printDstSwizzle(instr.dstSwizzle, false);
++            print(" = fh1VertexFetch({}, fh1VFetchAddress, {}, {}, {}, {}, {}, {}).",
++                slot, int32_t(instr.offset), uint32_t(instr.format), uint32_t(instr.formatCompAll),
++                uint32_t(instr.numFormatAll), uint32_t(instr.signedRfModeAll), int32_t(instr.expAdjust));
++            printDstSwizzle(instr.dstSwizzle, true);
++            out += ";\n";
++        }
++        printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
++        if (instr.isPredicated)
++        {
++            --indentation;
++            indent();
++            out += "}\n";
++        }
++        return;
++    }
++#endif
+ 
+     indent();
+     print("r{}.", instr.dstRegister);
+@@ -1304,6 +1376,10 @@
+ 
+     out += "\tDEFINE_SHARED_CONSTANTS();\n";
+     out += "};\n\n";
++#ifdef FH1_RECOMP
++    out += "uint4 fh1VertexFetchBinding(uint slot) { return g_Fh1VertexFetchBindings[slot]; }\n";
++    out += "float fh1InitialVertexIndex(uint index) { return float(clamp(index & 0xFFFFFF, g_Fh1VertexIndexMin, g_Fh1VertexIndexMax)); }\n";
++#endif
+ 
+     out += "#endif\n";
+ 
+@@ -1400,6 +1476,10 @@
+             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
+         }
+ 
++    #ifdef FH1_RECOMP
++        out += "\tin uint iVertexId : SV_VertexID,\n";
++    #endif
++
+     #ifdef UNLEASHED_RECOMP
+         if (hasIndexCount)
+         {
+@@ -1527,6 +1607,12 @@
+             {
+                 out += "float4((iPos.xy - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0);\n";
+             }
++        #ifdef FH1_RECOMP
++            else if (!isPixelShader && i == 0)
++            {
++                out += "float4(fh1InitialVertexIndex(iVertexId), 0.0, 0.0, 0.0);\n";
++            }
++        #endif
+         #ifdef UNLEASHED_RECOMP
+             else if (!isPixelShader && hasIndexCount && i == 0)
+             {
+@@ -1540,6 +1626,9 @@
+         }
+     }
+ 
++#ifdef FH1_RECOMP
++    out += "\tint64_t fh1VFetchAddress = -549755813888ll;\n";
++#endif
+     out += "\tint a0 = 0;\n";
+     out += "\tint aL = 0;\n";
+     out += "\tbool p0 = false;\n";
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -33,6 +33,11 @@
+     std::unordered_map<uint32_t, const char*> samplers;
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
++#ifdef FH1_RECOMP
++    uint32_t fh1FullFetchSlot = UINT32_MAX;
++    uint32_t fh1FullFetchStride = 0;
++    uint32_t fh1FullFetchAddress = UINT32_MAX;
++#endif
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool hasMtxProjection = false;

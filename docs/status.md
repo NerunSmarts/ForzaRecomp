@@ -33,10 +33,11 @@ multi-object waits. The measurements are recorded in [profiling.md](profiling.md
 | 3D CPU profiling | Confirmed loaded scene: 20.70 seconds of samples, no WMV decoder frames; audio worker 0.36%, guest yielding 27.9%, GPU command thread 7.2% of sampled CPU work |
 | 3D GPU profiling | Combined trace saved but has only approximately 0.52 seconds of execution data; sustained GPU and frame-time comparison pending |
 | Shader import | All 174 effect files parse; 207 declarations and 2,918 unique shader programs extracted locally with reflection and interfaces |
-| Experimental native shader adapter | Separate clean host-tool build passes; 38 of 40 sampled shaders compile and pass Vulkan SPIR-V validation; two undeclared buffer-fetch cases remain unsupported |
+| Experimental native shader adapter | All 1,511 imported vertex programs compile and pass Vulkan SPIR-V validation; original mixed sample 40/40, expanded sample 70/72 with two pixel boolean-register failures |
+| Native buffer-fetch correctness | All 15 formats plus full/mini address reuse implemented; host binding preflight and 4,013 synthetic MoltenVK cases pass on Apple M2; original-material draw still needs captured resources |
 | Graphics hook investigation | Direct-call map finds 21 Vd import groups; swap/init candidates identified, native resource/draw hooks still require verification |
 | Native renderer runtime | Planned Vulkan/MoltenVK backend with Xenos fallback; no native FH1 draw or speedup demonstrated yet |
-| Public-tree, malformed-input and shader-variant checks | 21 tests pass; publication audit passes, including effect objects, profiler data and symbol bundles |
+| Public-tree, malformed-input and shader-variant checks | 29 tests pass, including native ABI goldens under UBSan, resource-slot conflicts and overlapping dependency patch replay; publication audit passes |
 | SDK bootstrap | Idempotent local rerun passes; clean second checkout not tested |
 
 The first presentation attempt showed one frame and then a black fullscreen
